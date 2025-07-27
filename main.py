@@ -33,7 +33,6 @@ sys.exit(exit_code)
 # TODO: noch letztes bisschen Logging von Selenium wegbekommen
 # TODO: Funktion best Views per View Analyzer mit allen analytischen Modellen machen
 # TODO: Asyncio statt Threads?
-# TODO: Pandas zum Updaten der CSV nehmen
 
 # Weitere TODO:
 # Idee: Automatisierung von View-Transporten?
