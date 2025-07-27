@@ -1,6 +1,8 @@
 import sys
 
-from datasphere.helper import AnalyticalModels, RemoteTables, Views
+from datasphere.analytical_models import AnalyticalModels
+from datasphere.remote_tables import RemoteTables
+from datasphere.views import Views
 from time import sleep
 from typing import Callable
 

@@ -1,0 +1,872 @@
+import concurrent.futures
+import csv
+import threading
+
+from copy import deepcopy
+from datasphere.automation import DatasphereAutomation
+from datasphere.custom_types import ViewDetailsDict
+from time import sleep
+from typing import Optional
+from urllib.parse import quote, urlencode
+from utils.filehandler import settings, Datasphere
+from utils.logging import logger
+from uuid import uuid4
+
+import pandas as pd
+import requests
+
+
+# Wichtige Bedingungen aus Settings
+URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
+
+# Wichtige URLs aus Settings
+DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
+
+
+class Views(DatasphereAutomation):
+
+    def __init__(self, session: requests.Session = None):
+
+        # DatasphereAutomation initialisieren
+        super().__init__(session)
+
+    def _get_all_views(self) -> list[ViewDetailsDict]:
+        """
+        Gibt alle Views als Liste von Dictionaries zurück.
+
+        Returns:
+            list[ViewDetailsDict]: Liste von Dictionaries mit View-Namen ("name") und detaillierten Informationen.
+        """
+
+        # Headers anpassen
+        for header in ("X-Csrf-Token", "X-Requested-With", "Priority"):
+            try:
+                self.session.headers.pop(header)
+            except KeyError:
+                pass
+        self.session.headers.update({
+            "Accept": "application/json",
+            "Accept-Language": "de",
+            "UI5-Timezone": "Europe/Berlin",
+            "UI5-Timepattern": "H%3Amm%3Ass",
+            "UI5-Datepattern": "dd.MM.yyyy",
+            "Cache-Control": "no-cache"
+        })
+
+        # Abfrage vorbereiten
+        url = f"{DATASPHERE_URL}/deepsea/repository/search/$all"
+        params = {
+            "$top": 10000,  # kann nicht weggelassen werden, deswegen zu große Anzahl damit alle Einträge geladen werden
+            "$skip": 0,
+            "whyfound": "true",
+            "$count": "true",
+            "valuehierarchy": "folder_id",
+            "facets": "all",
+            "facetlimit": 5,
+            "$apply": 'filter(Search.search(query=\'SCOPE:SEARCH_DESIGN (technical_type_description:EQ(S):"View" AND '\
+                      '(technical_type:EQ(S):"DWC_REMOTE_TABLE" OR technical_type:EQ(S):"DWC_LOCAL_TABLE" OR ' \
+                      'technical_type:EQ(S):"DWC_VIEW" OR technical_type:EQ(S):"DWC_ERMODEL" OR technical_type:EQ(S):' \
+                      '"DWC_DATAFLOW" OR technical_type:EQ(S):"DWC_IDT" OR technical_type:EQ(S):"DWC_BUSINESS_ENTITY"' \
+                      ' OR technical_type:EQ(S):"DWC_AUTH_SCENARIO" OR technical_type:EQ(S):"DWC_FACT_MODEL" OR ' \
+                      'technical_type:EQ(S):"DWC_CONSUMPTION_MODEL" OR technical_type:EQ(S):"DWC_PERSPECTIVE" OR ' \
+                      'kind:EQ(S):"sap.dis.dataflow" OR kind:EQ(S):"sap.dwc.dac" OR kind:EQ(S):"sap.repo.folder" OR ' \
+                      'kind:EQ(S):"sap.dwc.analyticModel" OR kind:EQ(S):"sap.dwc.taskChain" OR kind:EQ(S):' \
+                      '"sap.dis.replicationflow" OR technical_type:EQ(S):"DWC_TRANSFORMATIONFLOW")) *\'))'
+        }
+
+        # Anfrage senden
+        logger.debug("Lade alle Views...")
+        response = self.session.get(url=url, params=urlencode(params, safe="()*", quote_via=quote))
+        all_views: list[ViewDetailsDict] = response.json()["value"]
+
+        # Nicht benötigte Headers für weitere Requests wieder entfernen
+        for header in ("Origin", "UI5-Timezone", "UI5-Timepattern", "UI5-Datepattern", "Cache-Control"):
+            try:
+                self.session.headers.pop(header)
+            except KeyError:
+                pass
+
+        return all_views
+
+    def get_all_views_where_attribute_contains(self, word: str) -> None:
+        """
+        Gibt alle Views als CSV-Datei aus, die ein Attribut haben, dass das Suchwort enthält.
+
+        Args:
+            word (str): Suchwort (case-insensitive).
+        """
+
+        # Alle Views abfragen
+        all_views = self._get_all_views()
+
+        # Headers anpassen (Voraussetzung: vorher wird immer get_all_view_names() aufgerufen)
+        self.session.headers.update({
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest"
+        })
+
+        # Abfrage vorbereiten
+        logger.debug(f"Suche nach Views, die ein Attribut haben, dass den Substring '{word}' enthält...")
+        params = {
+            "ids": "",
+            "details": "id,#repairedCsn,#ownerBusinessName,#creatorBusinessName,#repositoryPackage," \
+                       "@EnterpriseSearch.enabled,@remote.source,@DataWarehouse.external.schema," \
+                       "#objectPathIdentifier,#repositoryPackage,#repositoryValidationDate,hasPendingError," \
+                       "#isI18nEnabled",
+            "kinds": "entity,view,sap.dwc.ermodel,sap.dis.dataflow,sap.dwc.taskChain,sap.dwc.analyticModel," \
+                     "sap.dwc.dac,sap.repo.folder,sap.dis.replicationflow,sap.dis.transformationflow," \
+                     "sap.dwc.perspective,sap.dwc.consumptionModel,sap.dwc.factModel,sap.dwc.businessEntity," \
+                     "sap.dwc.authscenario"
+        }
+        for view in all_views:
+
+            # Parameter anpassen
+            params["ids"] = view["id"]
+
+            # Request-ID aktualisieren
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", ""),})
+
+            # Abfrage senden
+            logger.debug(f"Prüfe View {view['name']} in {view['space_name']}...")
+            response = self.session.get(url=f"{DATASPHERE_URL}/deepsea/repository"
+                                            f"/{view['space_name']}/designObjects", params=params)
+            try:
+                view_data = response.json()
+            except requests.exceptions.JSONDecodeError:
+                logger.error(f"Fehler beim Abfragen der View {view['name']} in {view['space_name']}.")
+                logger.debug(f"View: {view}\nResponse: {response.text}\n")
+                continue
+
+            # Infos in Datei schreiben, falls Attribut mit Suchwort enthalten ist
+            for attribute in view_data["results"][0]["#repairedCsn"]["definitions"][view["name"]]["elements"].keys():
+                if word.lower() in attribute.lower():
+                    logger.info(f"View {view['name']} in {view['space_name']} hat Attribut '{attribute}'.")
+                    with open(Datasphere.ALL_FILES["VIEW_ATTRIBUTE"]["absolute_path"], "a", newline="",
+                              encoding="utf-8") as file:
+                        writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_ATTRIBUTE"]["columns"])
+                        values = {
+                            "entity": view["name"],
+                            "space": view["space_name"],
+                            "businessName": view["business_name"],
+                            "attribute": attribute
+                        }
+                        writer.writerow(values)
+
+    def create_view_analytics(self, use_threads: bool = True, thread_count: int = 1) -> None:
+        """
+        Erstellt View-Analysen für alle Views. Threads können in geringer Anzahl genutzt werden, da es sonst zu
+        Ratelimits kommen kann. Fünf Threads sind fehlerfrei durchgelaufen.
+
+        Args:
+            use_threads (bool, optional): Wenn True, werden Threads genutzt. Standard ist True.
+            thread_count (int, optional): Anzahl an Threads / gleichzeitigen Anfragen. Standard ist 1.
+        """
+
+        # Alle Views abfragen
+        all_views = self._get_all_views()
+
+        # Headers anpassen (Voraussetzung: vorher wird immer get_all_view_names() aufgerufen)
+        self.session.headers.update({
+            "x-request-id": str(uuid4()).replace("-", ""),
+            "Accept": "*/*",
+            "X-Requested-With": "XMLHttpRequest"
+        })
+
+        # Tasks starten
+        if use_threads:
+            lock = threading.Lock()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+                for view in all_views:
+                    executor.submit(self._create_view_analytics, view, deepcopy(self.session), lock)
+        else:
+            for view in all_views:
+                self._create_view_analytics(view, self.session)
+
+    def _create_view_analytics(self, view: ViewDetailsDict, session: requests.Session,
+                               lock: Optional[threading.Lock] = None, filter_out_own_view: bool = False) -> None:
+        """
+        Beeinhaltet die Logik zur Erstellung der View-Analysen. Diese Funktion wird über Threads aufgerufen.
+        Schreibt alle Views, die in der Analyse mit einem Persistenz-Score von 10 bewertet wurden in eine Datei.
+
+        Args:
+            view (ViewDetailsDict): View, für die eine Analyse erstellt wird.
+            session (requests.Session): Kopie der Standard-Session (initialiserte Session nach Aufruf 
+                                        von get_all_view_names())
+            lock (threading.Lock, optional): Threading-Lock für Operationen mit Exportdatei. Standard ist None.
+            filter_out_own_view (bool, optional): Wenn True, wird die eigene View aus der Analyse ausgeschlossen.
+                                                  Standard ist False.
+        """
+
+        # Abfrage vorbereiten
+        logger.debug(f"Starte View Analyse für {view['name']} in {view['space_name']}...")
+        space_name = view["space_name"]
+        view_name = view["name"]
+        url = f"{DATASPHERE_URL}/dwaas-core/advisor/{space_name}/execute/{view_name}"
+        data = {
+            "withMemoryAnalysis": False,
+            "maximumMemoryConsumptionInGiB": 1
+        }
+        response = session.post(url=url, json=data)
+
+        # Auf Fehler prüfen
+        if not (response.status_code == 409 and "taskAlreadyRunning" in response.text) \
+            and not (response.status_code == 202 and "Running" in response.text):
+            logger.error(f"Fehler beim Starten der View Analyse für {view_name} in {space_name}.")
+            return
+        logger.info(f"View Analyse für {view_name} in {space_name} gestartet.")
+
+        # Request-ID aktualisieren
+        session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+
+        # Logs der letzten Läufe fetchen
+        def fetch_logs() -> list[dict]:
+            response = session.get(url=f"{DATASPHERE_URL}/dwaas-core/tf/{space_name}/logs",
+                                        params={"objectId": view_name, "getLocks": True})
+            return response.json()["logs"]
+
+        # Ergebnisse abwarten
+        latest_status = None
+        while latest_status != "COMPLETED":
+            logs = fetch_logs()
+            latest_status = logs[0]["status"]
+            if latest_status == "FAILED":
+                logger.error(f"Fehler beim Generieren der View Analyse für {view_name} in {space_name}.")
+                return 
+            # TODO: hier noch aktuelle Laufzeit mit loggen, gibt nur 'startTime': '2025-07-15T07:25:18.803Z' und 'runTime': 239 (in Sekunden)
+            logger.debug(f"Warte auf Ergebnisse für {view_name} in {space_name}...")
+            sleep(1)
+
+        # Log-ID des letzten Laufs auslesen
+        log_id: int = fetch_logs()[0]["logId"]
+
+        # Request-ID aktualisieren
+        session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+
+        # Ergebnisse auslesen
+        response = session.get(url=f"{DATASPHERE_URL}/dwaas-core/advisor/"
+                                   f"{space_name}/result/{log_id}")
+
+        # View mit besten Persistenz-Score ermitteln (10 wird nur einmal vergeben)
+        # Eigene View rausfiltern, wenn gewünscht, weil sonst kleinere Views immer selber Score 10 erhalten
+        entity_stats = response.json()["entityStats"]
+        if filter_out_own_view:
+            entity_stats = list(filter(lambda entity: entity["entity"] != view_name, entity_stats))
+        best_view = list(filter(lambda entity: entity.get("persistencyCandidateScore", 0) == 10, entity_stats))
+
+        # Falls View mit Score 10 gefunden, in Datei schreiben
+        if best_view:
+            logger.info(f"View {best_view[0]['entity']} in {best_view[0]['space']} hat Persistenz-Score 10.")
+            if lock:
+                lock.acquire()
+            with open(Datasphere.ALL_FILES["VIEW_ANALYSE"]["absolute_path"], "a", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_ANALYSE"]["columns"])
+                writer.writerow({key: best_view[0][key] for key in Datasphere.ALL_FILES["VIEW_ANALYSE"]["columns"]})
+            if lock:
+                lock.release()
+        else:
+            logger.debug("Keine View mit Persistenz-Score 10 gefunden.")
+
+    def create_partitioning_for_views(self, partitions: list[str], overwrite_existing_partitions: bool = False) -> None:
+        """
+        Erstellt Partitionen für alle Views, die in der Datei 'views_to_partition.csv' enthalten sind.
+        Benötigt die Task-Datei VIEW_PARTITIONING_FILE_PATH.
+        Schreibt Ergebnisse in VIEW_PARTITIONING_RESULT_FILE_PATH.
+
+        Args:
+            partitions (list[str]): Liste aller Partitionen, die erstellt werden sollen, in richtiger Reihenfolge.
+                                    (Bsp.: ['0000', '2001', '2002', ...]) Letzter Wert ist Obergrenze der letzten 
+                                    Partition (Bsp.: FISCYEAR < 2025). Muss deshalb mindestens zwei Werte haben.
+            overwrite_existing_partitions (bool, optional): Wenn True, werden bereits existierende Partitionen
+                                                            überschrieben. Andernfalls bleiben sie bestehen.
+                                                            Standard ist False.
+        """
+
+        # Task-Datei lesen
+        views_to_partition = []
+        with open(Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE"]["absolute_path"], "r", newline="",
+                  encoding="utf-8") as file:
+            reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE"]["columns"])
+            views_to_partition = list(reader)[1:]
+
+        # Headers anpassen (Voraussetzung: vorher wurde keine andere Methode aufgerufen)
+        self.session.headers.pop("Origin")
+        self.session.headers.pop("Priority")
+        self.session.headers.update({"Accept": "*/*"})
+
+        # Alle Views durchlaufen
+        for view in views_to_partition:
+
+            # Prüfen, ob Partition bereits existiert
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            response = self.session.get(url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
+                                            f"/{view['space']}/persistedViews/{view['entity']}")
+            partition_exists = len(response.json()["ranges"]) > 0
+            format_check = response.json()["partitioningColumns"][view["attribute"]]["type"] == "cds.String"
+
+            # Prüfen, ob Partitionsspalte ein String ist
+            if not format_check:
+                logger.error(f"Attribut '{view['attribute']}' der View {view['entity']} in {view['space']} ist "
+                             f"kein String. Wird übersprungen...")
+                with open(Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"]["absolute_path"], "a", newline="",
+                          encoding="utf-8") as file:
+                    writer = csv.DictWriter(
+                        file,
+                        fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"]["columns"]
+                    )
+                    values = {
+                        "entity": view["entity"],
+                        "space": view["space"],
+                        "attribute": view["attribute"],
+                        "createdPartition": False
+                    }
+                    writer.writerow(values)
+                continue
+
+            # In Datei vermerken und überspringen, falls Partition bereits existiert und nicht überschrieben werden soll
+            if partition_exists and not overwrite_existing_partitions:
+                logger.debug(f"{view['entity']} in {view['space']} ist bereits partitioniert. Wird übersprungen...")
+                with open(Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"]["absolute_path"], "a", newline="",
+                          encoding="utf-8") as file:
+                    writer = csv.DictWriter(
+                        file,
+                        fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"]["columns"]
+                    )
+                    values = {
+                        "entity": view["entity"],
+                        "space": view["space"],
+                        "attribute": view["attribute"],
+                        "createdPartition": True
+                    }
+                    writer.writerow(values)
+                continue
+
+            # Partitionen erstellen
+            logger.debug(f"Erstelle Partitionen für {view['entity']} in {view['space']}...")
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            url = f"{DATASPHERE_URL}/dwaas-core/partitioning/{view['space']}" \
+                  f"/persistedViews/{view['entity']}"
+            data = {
+                "remoteSourceName": "",
+                "objectName": view["entity"],
+                "numParallelPartitions": 1,
+                "ranges": [{
+                    "id": index+1,
+                    "low": {
+                        "include": True,
+                        "value": partitions[index]
+                    },
+                    "high": {
+                        "include": False,
+                        "value": partitions[index+1]
+                    },
+                    "locked": False
+                } for index in range(len(partitions)-1)],
+                "column": view["attribute"],
+                "columnType": "cds.String",
+                "runtimeDataCalculation": "designtime",
+                "type": "range"
+            }
+            response = self.session.post(url=url, json=data)
+
+            # In Datei vermerken
+            if response.status_code == 201:
+                logger.info(f"Partitionen für {view['entity']} in {view['space']} erstellt.")
+            else:
+                logger.error(f"Fehler beim Erstellen der Partitionen für {view['entity']} in {view['space']}.")
+                logger.debug(f"Response: {response.text}\n")
+            with open(Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"]["absolute_path"], "a", newline="") as file:
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"]["columns"]
+                )
+                values = {
+                    "entity": view["entity"],
+                    "space": view["space"],
+                    "attribute": view["attribute"],
+                    "createdPartition": True if response.status_code == 201 else False
+                }
+                writer.writerow(values)
+
+    def remove_partitioning_for_views(self) -> None:
+        """
+        Entfernt Partitionen für alle Views, die in der Datei 'views_to_delete_partition.csv' enthalten sind.
+        Benötigt die Task-Datei VIEW_TO_DELETE_PARTITIONING_FILE_PATH.
+        Schreibt Ergebnisse in VIEW_TO_DELETE_PARTITIONING_RESULT_FILE_PATH.
+        """
+
+        # Task-Datei lesen
+        views_to_delete_partition = []
+        with open(Datasphere.ALL_FILES["VIEW_PARTITIONING_DELETE"]["absolute_path"], "r", newline="",
+                  encoding="utf-8") as file:
+            reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_DELETE"]["columns"])
+            views_to_delete_partition = list(reader)[1:]
+
+        # Headers anpassen (Voraussetzung: vorher wurde keine andere Methode aufgerufen)
+        self.session.headers.pop("Origin")
+        self.session.headers.pop("Priority")
+        self.session.headers.update({"Accept": "*/*"})
+
+        # Alle Views durchlaufen
+        for view in views_to_delete_partition:
+
+            # Partition entfernen
+            logger.debug(f"Entferne Partition für {view['entity']} in {view['space']}...")
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            response = self.session.delete(url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
+                                               f"/{view['space']}/persistedViews/{view['entity']}")
+
+            # Fehler prüfen
+            if response.status_code != 200:
+                logger.error(f"Fehler beim Entfernen der Partition für {view['entity']} in {view['space']}.")
+                continue
+
+            # In Datei vermerken
+            logger.info(f"Partition für {view['entity']} in {view['space']} entfernt.")
+            with open(Datasphere.ALL_FILES["VIEW_PARTITIONING_DELETE_RESULT"]["absolute_path"], "a", 
+                      newline="") as file:
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_DELETE_RESULT"]["columns"]
+                )
+                values = {
+                    "entity": view["entity"],
+                    "space": view["space"],
+                    "removedPartition": True
+                }
+                writer.writerow(values)
+
+    def persist_views(self, use_threads: bool = True, thread_count: int = 1, timer: bool = False) -> None:
+        """
+        Persistiert Views. Threads können in geringer Anzahl genutzt werden, da es sonst zu
+        Ratelimits kommen kann. Fünf Threads sind fehlerfrei durchgelaufen.
+        Benötigt die Task-Datei VIEW_PERSIST_TASK_FILE_PATH. Schreibt Ergebnisse in VIEW_PERSIST_RESULT_FILE_PATH.
+
+        Args:
+            use_threads (bool, optional): Wenn True, werden Threads genutzt. Standard ist True.
+            thread_count (int, optional): Anzahl an Threads / gleichzeitigen Anfragen. Standard ist 1.
+            timer (bool, optional): Wenn True, wird die Dauer der Persistierung erfasst. Standard ist False.         
+        """
+
+        # Task-Datei lesen
+        views_to_persist = []
+        with open(Datasphere.ALL_FILES["VIEW_PERSIST"]["absolute_path"], "r", newline="") as file:
+            reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST"]["columns"])
+            views_to_persist = list(reader)[1:]
+
+        # Ergebnis-Datei mit Werten vorbefüllen
+        with open(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], "a", newline="",
+                  encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["columns"])
+            for view in views_to_persist:
+                values = {
+                    "entity": view["entity"],
+                    "space": view["space"],
+                    "isPersisted": False,
+                    "runtime": None
+                }
+                writer.writerow(values)
+
+        # Headers anpassen (Voraussetzung: vorher wurde keine andere Methode aufgerufen)
+        self.session.headers.pop("Priority")
+        self.session.headers.pop("Origin")
+        self.session.headers.update({
+            "Accept": "*/*",
+            "x-request-id": str(uuid4()).replace("-", "")
+        })
+
+        # Funktion um Result-Datei zu aktualisieren (erst gesamte Datei einlesen, dann neu schreiben,
+        # um entsprechende Zeile zu aktualisieren)
+        def set_is_persisted_true(view_name: str, view_space: str, lock: Optional[threading.Lock] = None) -> None:
+            if lock:
+                lock.acquire()
+            df = pd.read_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"])
+            df.loc[(df["entity"] == view_name) & (df["space"] == view_space), "isPersisted"] = True
+            df.to_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], index=False)
+            if lock:
+                lock.release()
+
+        # Funktion um Result-Datei zu aktualisieren (erst gesamte Datei einlesen, dann neu schreiben,
+        # um entsprechende Zeile zu aktualisieren)
+        def update_runtime(view_name: str, view_space: str, runtime: int, lock: Optional[threading.Lock] = None) -> None:
+            if lock:
+                lock.acquire()
+            df = pd.read_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], dtype={"runtime": "Int64"})
+            df.loc[(df["entity"] == view_name) & (df["space"] == view_space), "runtime"] = runtime
+            df.to_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], index=False)
+            if lock:
+                lock.release()
+
+        # Tasks starten
+        if use_threads:
+            lock = threading.Lock()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+                future_to_view_mapping = {
+                    executor.submit(self._persist_view, deepcopy(self.session), view["entity"], view["space"]): view
+                    for view in views_to_persist
+                }
+                for future in concurrent.futures.as_completed(future_to_view_mapping):
+                    view = future_to_view_mapping[future]
+                    success, log_details = future.result()
+                    runtime = round(log_details.get("runTime", 0)/1000)
+                    if success:
+                        set_is_persisted_true(view["entity"], view["space"], lock)
+                        if timer and runtime > 0:
+                            update_runtime(view["entity"], view["space"], runtime, lock)
+
+        else:
+            for view in views_to_persist:
+                success, log_details = self._persist_view(self.session, view["entity"], view["space"])
+                runtime = round(log_details.get("runTime", -1000)/1000)
+                if success:
+                    set_is_persisted_true(view["entity"], view["space"])
+                    if timer and runtime > 0:
+                        update_runtime(view["entity"], view["space"], runtime)
+
+    def _persist_view(self, session: requests.Session, view_name: str, view_space: str) -> tuple[bool, dict]:
+        """
+        Persistiert eine View. Prüft dabei nicht, ob die View bereits persistiert ist.
+
+        Args:
+            session (requests.Session): Kopie der Standard-Session (initialiserte Session).
+            view_name (str): Name der View.
+            view_space (str): Name des View-Spaces.
+
+        Returns:
+            tuple[bool, dict]: True, wenn Persistierung erfolgreich war, sonst False. Dict mit Log-Details.
+        """
+
+        # Persistenz starten
+        logger.debug(f"Starte Persistierung für {view_name} in {view_space}...")
+        url = f"{DATASPHERE_URL}/dwaas-core/tf/directexecute"
+        data = {
+            "applicationId": "VIEWS",
+            "spaceId": view_space,
+            "objectId": view_name,
+            "activity": "PERSIST"
+        }
+        response = session.post(url=url, json=data)
+
+        # Ergebnis prüfen und taskLogId parsen
+        if response.status_code != 202:
+            logger.error(f"Fehler beim Starten der Persistierung für {view_name} in {view_space}. Wird übersprungen...")
+            return False, {}
+        log_id = response.json()["taskLogId"]
+
+        # Funktion zum Abrufen der Log-Details
+        def fetch_log_details() -> dict:
+            session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            response = session.get(url=f"{DATASPHERE_URL}/dwaas-core/tf/{view_space}"
+                                       f"/extendedlogs/{log_id}")
+            return response.json()["logDetails"]
+
+        # Ergebnisse abwarten
+        log_details = {}
+        while True:
+            log_details = fetch_log_details()
+            latest_status = log_details["status"]
+            if latest_status == "COMPLETED":
+                break
+            if latest_status == "FAILED" or (latest_status != "COMPLETED" and latest_status != "RUNNING"):
+                logger.error(f"Fehler beim Persistieren von {view_name} in {view_space}.")
+                return False, log_details
+
+            # Laufzeit in lesbares Format umwandeln und ausgeben
+            milliseconds = log_details["runTime"]
+            hours, remainder = divmod(milliseconds, 3600000)
+            minutes, seconds = divmod(remainder, 60000)
+            seconds, milliseconds = divmod(seconds, 1000)
+            logger.debug(f"Warte auf Ergebnisse für {view_name} in {view_space}. "
+                         f"Aktuelle Laufzeit: {hours:02}:{minutes:02}:{seconds:02}.")
+            sleep(1)
+
+        # Result-Datei aktualisieren (erst gesamte Datei einlesen, dann neu schreiben,
+        # um entsprechende Zeile zu aktualisieren)
+        logger.info(f"Persistierung für {view_name} in {view_space} abgeschlossen.")
+        return True, log_details
+
+    def unpersist_views(self, use_threads: bool = True, thread_count: int = 1) -> None:
+        """
+        Entfernt Persistenzen für Views. Threads können in geringer Anzahl genutzt werden, da es sonst zu
+        Ratelimits kommen kann. Fünf Threads sind fehlerfrei durchgelaufen.
+        Benötigt die Task-Datei VIEW_UNPERSIST_TASK_FILE_PATH. Schreibt Ergebnisse in VIEW_UNPERSIST_RESULT_FILE_PATH.
+
+        Args:
+            use_threads (bool, optional): Wenn True, werden Threads genutzt. Standard ist True.
+            thread_count (int, optional): Anzahl an Threads / gleichzeitigen Anfragen. Standard ist 1.
+        """
+
+        # Task-Datei lesen
+        views_to_unpersist = []
+        with open(Datasphere.ALL_FILES["VIEW_UNPERSIST"]["absolute_path"], "r", newline="") as file:
+            reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_UNPERSIST"]["columns"])
+            views_to_unpersist = list(reader)[1:]
+
+        # Ergebnis-Datei mit Werten vorbefüllen
+        with open(Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"], "a", newline="",
+                  encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["columns"])
+            for view in views_to_unpersist:
+                values = {
+                    "entity": view["entity"],
+                    "space": view["space"],
+                    "isRemoved": False
+                }
+                writer.writerow(values)
+
+        # Headers anpassen (Voraussetzung: vorher wurde keine andere Methode aufgerufen)
+        self.session.headers.pop("Priority")
+        self.session.headers.pop("Origin")
+        self.session.headers.update({
+            "Accept": "*/*",
+            "x-request-id": str(uuid4()).replace("-", "")
+        })
+
+        # Funktion, um nur entsprechende Zeile in Result-Datei zu aktualisieren
+        def set_is_removed_true(view_name: str, view_space: str, lock: Optional[threading.Lock] = None) -> None:
+            """Setzt isRemoved in der Result-Datei für die aktuelle View auf True.
+            """
+            if lock:
+                lock.acquire()
+            df = pd.read_csv(Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"])
+            df.loc[(df["entity"] == view_name) & (df["space"] == view_space), "isRemoved"] = True
+            df.to_csv(Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"], index=False)
+            if lock:
+                lock.release()
+
+        # Tasks starten
+        if use_threads:
+            lock = threading.Lock()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
+                future_to_view_mapping = {
+                    executor.submit(self._unpersist_view, deepcopy(self.session), view["entity"], view["space"]): view
+                    for view in views_to_unpersist
+                }
+                for future in concurrent.futures.as_completed(future_to_view_mapping):
+                    view = future_to_view_mapping[future]
+                    success, _ = future.result()
+                    if success:
+                        set_is_removed_true(view["entity"], view["space"], lock)
+        else:
+            for view in views_to_unpersist:
+                success, _ = self._unpersist_view(self.session, view["entity"], view["space"])
+                if success:
+                    set_is_removed_true(view["entity"], view["space"])
+
+    def _unpersist_view(self, session: requests.Session, view_name: str, view_space: str) -> tuple[bool, dict]:
+        """
+        Entfernt die Persistenz für eine View. Prüft vorher, ob View persistiert ist.
+
+        Args:
+            session (requests.Session): Kopie der Standard-Session (initialiserte Session).
+            view_name (str): Name der View.
+            view_space (str): Name des View-Spaces.
+
+        Returns:
+            tuple[bool, dict]: True, wenn Entfernung der Persistenz erfolgreich war, sonst False. Dict mit Log-Details.
+        """
+
+        # Prüfen, ob View persistiert ist
+        url = f"{DATASPHERE_URL}/dwaas-core/monitor/{view_space}/persistedViews/{view_name}"
+        response = session.get(url=url)
+        if response.status_code != 200 or "dataPersistency" not in response.json().keys():
+            logger.error(f"Fehler beim Prüfen, ob View {view_name} in {view_space} persistiert ist. "
+                         f"Statuscode: {response.status_code}. Wird übersprungen...")
+            return False, {}
+        if response.json()["dataPersistency"] != "Persisted":
+            logger.debug(f"View {view_name} in {view_space} ist nicht persistiert. Wird übersprungen...")
+            return True, {}
+
+        # Persistenz entfernen
+        logger.debug(f"Entferne Persistenz für {view_name} in {view_space}...")
+        session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+        url = f"{DATASPHERE_URL}/dwaas-core/tf/directexecute"
+        data = {
+            "applicationId": "VIEWS",
+            "spaceId": view_space,
+            "objectId": view_name,
+            "activity": "REMOVE_PERSISTED_DATA"
+        }
+        response = session.post(url=url, json=data)
+
+        # Ergebnis prüfen und taskLogId parsen
+        if response.status_code != 202:
+            logger.error(f"Fehler beim Entfernen der Persistenz für {view_name} in {view_space}. Wird übersprungen...")
+            return False, {}
+        log_id = response.json()["taskLogId"]
+
+        # Funktion zum Abrufen der Log-Details
+        def fetch_log_details() -> list[dict]:
+            session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            response = session.get(url=f"{DATASPHERE_URL}/dwaas-core/tf/{view_space}"
+                                            f"/extendedlogs/{log_id}")
+            return response.json()["logDetails"]
+
+        # Ergebnisse abwarten
+        log_details = {}
+        while True:
+            log_details = fetch_log_details()
+            latest_status = log_details["status"]
+            if latest_status == "COMPLETED":
+                break
+            if latest_status == "FAILED" or (latest_status != "COMPLETED" and latest_status != "RUNNING"):
+                logger.error(f"Fehler beim Entfernen der Persistenz für {view_name} in {view_space}.")
+                return False, log_details
+
+            # Laufzeit in lesbares Format umwandeln und ausgeben
+            milliseconds = log_details["runTime"]
+            hours, remainder = divmod(milliseconds, 3600000)
+            minutes, seconds = divmod(remainder, 60000)
+            seconds, milliseconds = divmod(seconds, 1000)
+            logger.debug(f"Warte auf Ergebnisse für {view_name} in {view_space}. "
+                         f"Aktuelle Laufzeit: {hours:02}:{minutes:02}:{seconds:02}.")
+            sleep(1)
+
+        # Result-Datei aktualisieren
+        logger.info(f"Persistenz für {view_name} in {view_space} entfernt.")
+        return True, log_details
+
+    def lock_partitions_until_year(self, year: int) -> None:
+        """
+        Sperrt Partitionen für alle Views, die in der Datei 'views_to_lock_partitions.csv' enthalten sind. Überspringt
+        Views, die keine Partitionen haben. Alle Partitionen MÜSSEN ganzzahlige Werte sein!!
+        Benötigt die Task-Datei VIEW_PARTITION_LOCK_FILE_PATH.
+        Schreibt Ergebnisse in VIEW_PARTITION_LOCK_RESULT_FILE_PATH.
+
+        Args:
+            year (int): Jahr, bis zu dem Partitionen gesperrt werden sollen (einschließlich des Jahres selbst). 
+        """
+
+        # Task-Datei lesen
+        views_to_lock = []
+        with open(Datasphere.ALL_FILES["VIEW_PARTITION_LOCK"]["absolute_path"], "r", newline="") as file:
+            reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_PARTITION_LOCK"]["columns"])
+            views_to_lock = list(reader)[1:]
+
+        # Headers anpassen (Voraussetzung: vorher wurde keine andere Methode aufgerufen)
+        self.session.headers.pop("Origin")
+        self.session.headers.pop("Priority")
+        self.session.headers.update({"Accept": "*/*"})
+
+        for view in views_to_lock:
+
+            # Prüfen, ob Partition bereits existiert
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            response = self.session.get(url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
+                                            f"/{view['space']}/persistedViews/{view['entity']}")
+            partition_exists = len(response.json()["ranges"]) > 0
+
+            # Fehler prüfen
+            if not partition_exists:
+                logger.error(f"View {view['entity']} in {view['space']} hat keine Partitionen. Wird übersprungen...")
+                continue
+
+            # Daten der View abrufen
+            view_data = response.json()
+
+            # Partitionen sperren
+            logger.debug(f"Sperre Partitionen für {view['entity']} in {view['space']} "
+                         f"bis einschließlich Jahr {year}...")
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            url = f"{DATASPHERE_URL}/dwaas-core/partitioning/{view['space']}" \
+                  f"/persistedViews/{view['entity']}"
+            data = {
+                "remoteSourceName": view_data["remoteSourceName"],
+                "objectName": view_data["objectName"],
+                "numParallelPartitions": view_data["numParallelPartitions"],
+                "ranges": view_data["ranges"],
+                "column": view_data["column"],
+                "columnType": view_data["columnType"],
+                "runtimeDataCalculation": view_data["runtimeDataCalculation"],
+                "type": view_data["type"]
+            }
+            for partition in data["ranges"]:
+                if int(partition["low"]["value"]) <= year:
+                    partition["locked"] = True
+            response = self.session.post(url=url, json=data)
+
+            # In Datei vermerken
+            if response.status_code == 201:
+                logger.info(f"Partitionen für {view['entity']} in {view['space']} wurden bis einschließlich Jahr "
+                            f"{year} gesperrt.")
+            else:
+                logger.error(f"Fehler beim Sperren der Partitionen für {view['entity']} in {view['space']}.")
+                logger.debug(f"Response: {response.text}\n")
+            with open(Datasphere.ALL_FILES["VIEW_PARTITION_LOCK_RESULT"]["absolute_path"], "a", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_PARTITION_LOCK_RESULT"]["columns"])
+                values = {
+                    "entity": view["entity"],
+                    "space": view["space"],
+                    "lockedPartitions": True if response.status_code == 201 else False
+                }
+                writer.writerow(values)
+
+    def unlock_all_partitions(self) -> None:
+        """
+        Entsperrt alle Partitionen für alle Views, die in der Datei 'views_to_unlock_partitions.csv' enthalten sind.
+        Benötigt die Task-Datei VIEW_PARTITION_UNLOCK_FILE_PATH.
+        Schreibt Ergebnisse in VIEW_PARTITION_UNLOCK_RESULT_FILE_PATH.
+        """
+
+        # Task-Datei lesen
+        views_to_unlock = []
+        with open(Datasphere.ALL_FILES["VIEW_PARTITION_UNLOCK"]["absolute_path"], "r", newline="") as file:
+            reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_PARTITION_UNLOCK"]["columns"])
+            views_to_unlock = list(reader)[1:]
+
+        # Headers anpassen (Voraussetzung: vorher wurde keine andere Methode aufgerufen)
+        self.session.headers.pop("Origin")
+        self.session.headers.pop("Priority")
+        self.session.headers.update({"Accept": "*/*"})
+
+        for view in views_to_unlock:
+
+            # Prüfen, ob Partition bereits existiert
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            response = self.session.get(url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
+                                            f"/{view['space']}/persistedViews/{view['entity']}")
+            partition_exists = len(response.json()["ranges"]) > 0
+
+            # Fehler prüfen
+            if not partition_exists:
+                logger.error(f"View {view['entity']} in {view['space']} hat keine Partitionen. Wird übersprungen...")
+                continue
+
+            # Daten der View abrufen
+            view_data = response.json()
+
+            # Partitionen entsperren
+            logger.debug(f"Entsperre alle Partitionen für {view['entity']} in {view['space']}...")
+            self.session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+            url = f"{DATASPHERE_URL}/dwaas-core/partitioning/{view['space']}" \
+                  f"/persistedViews/{view['entity']}"
+            data = {
+                "remoteSourceName": view_data["remoteSourceName"],
+                "objectName": view_data["objectName"],
+                "numParallelPartitions": view_data["numParallelPartitions"],
+                "ranges": view_data["ranges"],
+                "column": view_data["column"],
+                "columnType": view_data["columnType"],
+                "runtimeDataCalculation": view_data["runtimeDataCalculation"],
+                "type": view_data["type"]
+            }
+            for partition in data["ranges"]:
+                partition["locked"] = False
+            response = self.session.post(url=url, json=data)
+
+            # In Datei vermerken
+            if response.status_code == 201:
+                logger.info(f"Partitionen für {view['entity']} in {view['space']} wurden entsperrt.")
+            else:
+                logger.error(f"Fehler beim Entsperren der Partitionen für {view['entity']} in {view['space']}.")
+                logger.debug(f"Response: {response.text}\n")
+            with open(Datasphere.ALL_FILES["VIEW_PARTITION_UNLOCK_RESULT"]["absolute_path"], "a", newline="") as file:
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=Datasphere.ALL_FILES["VIEW_PARTITION_UNLOCK_RESULT"]["columns"]
+                )
+                values = {
+                    "entity": view["entity"],
+                    "space": view["space"],
+                    "unlockedPartitions": True if response.status_code == 201 else False
+                }
+                writer.writerow(values)

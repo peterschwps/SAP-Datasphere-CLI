@@ -38,5 +38,4 @@ sys.exit(exit_code)
 # Idee: Automatisierung von View-Transporten?
 # env Datei mit wichtigen Variablen erstellen (automatisiert per FilerHandler) und dann GitHub pushen?
 # Updates von Headern besser organisieren? Dass immer volle Headers gesetzt werden?
-# Datasphere weiter aufteilen?
 # kleinen Server parallel anbieten, der lokal immer läuft? Oder deploybar ist
