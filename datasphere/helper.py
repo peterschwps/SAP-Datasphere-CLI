@@ -18,6 +18,7 @@ from utils.filehandler import settings, Datasphere, COOKIES_FILE
 from utils.logging import logger
 from uuid import uuid4
 
+import pandas as pd
 import requests
 
 from bs4 import BeautifulSoup
@@ -1128,18 +1129,9 @@ class Views(DatasphereAutomation):
         def set_is_persisted_true(view_name: str, view_space: str, lock: Optional[threading.Lock] = None) -> None:
             if lock:
                 lock.acquire()
-            new_rows = []
-            with open(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], "r", newline="",
-                    encoding="utf-8") as file:
-                reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["columns"])
-                for row in reader:
-                    if row["entity"] == view_name and row["space"] == view_space:
-                        row["isPersisted"] = True
-                    new_rows.append(row)
-            with open(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], "w", newline="",
-                    encoding="utf-8") as file:
-                writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["columns"])
-                writer.writerows(new_rows)
+            df = pd.read_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"])
+            df.loc[(df["entity"] == view_name) & (df["space"] == view_space), "isPersisted"] = True
+            df.to_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], index=False)
             if lock:
                 lock.release()
 
@@ -1148,18 +1140,9 @@ class Views(DatasphereAutomation):
         def update_runtime(view_name: str, view_space: str, runtime: int, lock: Optional[threading.Lock] = None) -> None:
             if lock:
                 lock.acquire()
-            new_rows = []
-            with open(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], "r", newline="",
-                    encoding="utf-8") as file:
-                all_rows = list(csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["columns"]))
-                for row in all_rows[::-1]:
-                    if row["entity"] == view_name and row["space"] == view_space:
-                        row["runtime"] = runtime
-                    new_rows.insert(0, row)
-            with open(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], "w", newline="",
-                    encoding="utf-8") as file:
-                writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["columns"])
-                writer.writerows(new_rows)
+            df = pd.read_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], dtype={"runtime": "Int64"})
+            df.loc[(df["entity"] == view_name) & (df["space"] == view_space), "runtime"] = runtime
+            df.to_csv(Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"], index=False)
             if lock:
                 lock.release()
 
@@ -1227,11 +1210,12 @@ class Views(DatasphereAutomation):
             return response.json()["logDetails"]
 
         # Ergebnisse abwarten
-        latest_status = None
         log_details = {}
-        while latest_status != "COMPLETED":
+        while True:
             log_details = fetch_log_details()
             latest_status = log_details["status"]
+            if latest_status == "COMPLETED":
+                break
             if latest_status == "FAILED" or (latest_status != "COMPLETED" and latest_status != "RUNNING"):
                 logger.error(f"Fehler beim Persistieren von {view_name} in {view_space}.")
                 return False, log_details
@@ -1293,16 +1277,9 @@ class Views(DatasphereAutomation):
             """
             if lock:
                 lock.acquire()
-            new_rows = []
-            with open(Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"], "r", newline="") as file:
-                reader = csv.DictReader(file, fieldnames=Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["columns"])
-                for row in reader:
-                    if row["entity"] == view_name and row["space"] == view_space:
-                        row["isRemoved"] = True
-                    new_rows.append(row)
-            with open(Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"], "w", newline="") as file:
-                writer = csv.DictWriter(file, fieldnames=Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["columns"])
-                writer.writerows(new_rows)
+            df = pd.read_csv(Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"])
+            df.loc[(df["entity"] == view_name) & (df["space"] == view_space), "isRemoved"] = True
+            df.to_csv(Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"], index=False)
             if lock:
                 lock.release()
 
@@ -1375,11 +1352,12 @@ class Views(DatasphereAutomation):
             return response.json()["logDetails"]
 
         # Ergebnisse abwarten
-        latest_status = None
         log_details = {}
-        while latest_status != "COMPLETED":
+        while True:
             log_details = fetch_log_details()
             latest_status = log_details["status"]
+            if latest_status == "COMPLETED":
+                break
             if latest_status == "FAILED" or (latest_status != "COMPLETED" and latest_status != "RUNNING"):
                 logger.error(f"Fehler beim Entfernen der Persistenz für {view_name} in {view_space}.")
                 return False, log_details
@@ -1829,7 +1807,7 @@ class AnalyticalModels(DatasphereAutomation):
         analytical_models_with_views = {}
         for model in models_to_check:
 
-            # ID des Analytischen Modells aus dem ID-zu-Namen-un-Space-Mapping filtern
+            # ID des Analytischen Modells aus dem ID-zu-Namen-und-Space-Mapping filtern
             found = False
             for model_id, (name, space) in models_mapping_id_to_name_and_space.items():
                 if model["modelname"] == name and model["space"] == space:
