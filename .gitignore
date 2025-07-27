@@ -1,0 +1,11 @@
+# Directories
+__pycache__/
+.vscode/
+
+# Files
+.cookies.json
+*.log
+datasphere/exports/*
+datasphere/results/*
+datasphere/tasks/*
+settings.ini
