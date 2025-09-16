@@ -2,13 +2,12 @@ import inspect
 import logging
 import os.path
 import textwrap
-
+from collections.abc import Callable
 from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
-from typing import Any, Callable
+from typing import Any
 
 from rich import get_console
-
 
 # Define constants
 LEVEL_LOGS = logging.DEBUG  # Logging level for output to logs
@@ -26,7 +25,7 @@ FORMATS = {
     logging.INFO: "green",
     logging.WARNING: "yellow",
     logging.ERROR: "red",
-    logging.CRITICAL: "bold red"
+    logging.CRITICAL: "bold red",
 }
 
 # Set up the logger
@@ -36,7 +35,8 @@ logger = logging.getLogger(__name__)
 # Create formatter class for multiline strings
 class MultiLineformatter(logging.Formatter):
     """
-    Formatter Class to handle multi-line messages, inherits from the logging module.
+    Formatter Class to handle multi-line messages, inherits from the logging
+    module.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -53,15 +53,18 @@ class MultiLineformatter(logging.Formatter):
             - str: formatted string
         """
 
-        # Overwrite filename if call comes from wrapper function (uses extra param 'location')
-        # (otherwise logging.py would always be the filename in the log file)
+        # Overwrite filename if call comes from wrapper function
+        # (uses extra param 'location')
+        # Otherwise logging.py would always be the filename in the log file
         log_data = record.__dict__
-        if log_data["funcName"] == "wrapper" and log_data["module"] == "logging":
-            if "location" in log_data.keys():
-                log_data["filename"] = log_data["location"]
+        if (
+            log_data["funcName"] == "wrapper"
+            and log_data["module"] == "logging"
+        ) and "location" in log_data:
+            log_data["filename"] = log_data["location"]
 
-        # Get logging message
-        message = record.msg
+        # Get logging message (resolve %-formatting with args)
+        message = record.getMessage()
 
         # Check if exception
         is_exception = record.exc_info is not None
@@ -74,36 +77,45 @@ class MultiLineformatter(logging.Formatter):
 
         # Set msg to empty string (unless it is an exception)
         if not is_exception:
-            record.msg = ''
+            record.msg = ""
 
         # Format record (with empty message)
         header = super().format(record)
 
         # Indent message by length of header (record without message)
         if multiline_message and not is_exception:
-
-            # Create filler for line indentation matching the spaces of the format
-            empty_filler = "|".join([" " * len(segment) for segment in header.split("|")])
+            # Create filler for line indentation matching the spaces
+            # of the format
+            empty_filler = "|".join(
+                [" " * len(segment) for segment in header.split("|")]
+            )
 
             # Indent first line and add header to the front
-            msg = textwrap.indent(message.split("\n")[0], ' ' * len(header)).lstrip()
+            msg = textwrap.indent(
+                message.split("\n")[0], " " * len(header)
+            ).lstrip()
 
-            # Add all other lines without the header, only using the separation signs (pipe symbols)
+            # Add all other lines without the header, only using the separation
+            # signs (pipe symbols)
             for line in message.split("\n")[1:]:
                 msg += textwrap.indent("\n" + line, empty_filler)
 
         elif not multiline_message and not is_exception:
-            msg = textwrap.indent(message, ' ' * len(header)).lstrip()
+            msg = textwrap.indent(message, " " * len(header)).lstrip()
 
         else:
-            # Reformat message by adding type of error as the first line and traceback as the consecutive lines
-            record.msg = f"*** {type(record.msg).__name__} ***\n{record.exc_text}"
+            # Reformat message by adding type of error as the first line and
+            # traceback as the consecutive lines
+            record.msg = (
+                f"*** {type(record.msg).__name__} ***\n{record.exc_text}"
+            )
 
             # Set exception info and text to None so
             record.exc_info = None
             record.exc_text = None
 
-            # Recursively call function (won't be detected as an error now and handled like a normal record object)
+            # Recursively call function (won't be detected as an error now and
+            # handled like a normal record object)
             return self.format(record)
 
         # Set msg back to original message
@@ -112,11 +124,10 @@ class MultiLineformatter(logging.Formatter):
         # Concatenate header and record.msg
         log_message = header + msg
         return f"[{FORMATS[record.levelno]}]{log_message}[/]"
-    
+
 
 # Handler to print messages with rich
 class RichPrintHandler(logging.StreamHandler):
-
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.console = get_console()
@@ -126,17 +137,29 @@ class RichPrintHandler(logging.StreamHandler):
 
 
 # Set up formatters
-FILE_FORMAT = MultiLineformatter(fmt='{asctime}.{msecs:03.0f} | {levelname:^15s} | {filename:^30s} |'
-                                     + '{:^20s}'.format('Line: {lineno:04}') + '| {message}',
-                                 datefmt='%Y-%m-%d | %H:%M:%S', style='{')
+FILE_FORMAT = MultiLineformatter(
+    fmt="{asctime}.{msecs:03.0f} | {levelname:^15s} | {filename:^30s} |"
+    + "{:^20s}".format("Line: {lineno:04}")
+    + "| {message}",
+    datefmt="%Y-%m-%d | %H:%M:%S",
+    style="{",
+)
 
-STREAM_FORMAT = MultiLineformatter(fmt='{asctime}.{msecs:03.0f} | {levelname:^10s}' + '| {message}',
-                                   datefmt='%Y-%m-%d | %H:%M:%S', style='{')
+STREAM_FORMAT = MultiLineformatter(
+    fmt="{asctime}.{msecs:03.0f} | {levelname:^10s}" + "| {message}",
+    datefmt="%Y-%m-%d | %H:%M:%S",
+    style="{",
+)
 
 # Set up timed rotating file handler (creates one log file per day)
 file_handler = TimedRotatingFileHandler(
-    filename=f"{DIRECTORY_LOGS}/{datetime.now().year}{datetime.now().month:02}{datetime.now().day:02}.log",
-    when="midnight", encoding="utf-8")
+    filename=(
+        f"{DIRECTORY_LOGS}/{datetime.now().year}{datetime.now().month:02}"
+        f"{datetime.now().day:02}.log"
+    ),
+    when="midnight",
+    encoding="utf-8",
+)
 file_handler.setFormatter(FILE_FORMAT)
 file_handler.setLevel(LEVEL_LOGS)
 
@@ -156,10 +179,11 @@ logger.setLevel(logging.DEBUG)
 # Wrapper to track execution time of a function
 def track_time(func: Any) -> Callable[[Any], None]:
     """
-    A decorator function to automatically log the execution time of a function. Uses the log level 'debug'.
+    A decorator function to automatically log the execution time of a function.
+    Uses the log level 'debug'.
     """
-    def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> None:
 
+    def wrapper(*args: tuple[Any, ...], **kwargs: dict[str, Any]) -> None:
         # Start timer, function and calculate execution time
         start = datetime.now()
         func(*args, **kwargs)
@@ -167,11 +191,20 @@ def track_time(func: Any) -> Callable[[Any], None]:
 
         # Try to retrieve filename (TypeError for built-ins)
         try:
-            filename = inspect.getfile(func).split('\\')[-1]
-            logger.debug(msg=f"Execution time of '{func.__name__}' from '{filename}': "
-                         f"{round(execution_time.total_seconds(), 3)} seconds.", extra={"location": filename})
+            filename = inspect.getfile(func).split("\\")[-1]
+            logger.debug(
+                "Execution time of '%s' from '%s': %s seconds.",
+                func.__name__,
+                filename,
+                round(execution_time.total_seconds(), 3),
+                extra={"location": filename},
+            )
         except (TypeError, IndexError):
-            logger.debug(msg=f"Execution time of '{func.__name__}' from '{filename}': "
-                         f"{round(execution_time.total_seconds(), 3)} seconds.")
+            logger.debug(
+                "Execution time of '%s' from '%s': %s seconds.",
+                func.__name__,
+                filename,
+                round(execution_time.total_seconds(), 3),
+            )
 
     return wrapper
