@@ -10,7 +10,7 @@ class StatisticsInformationDict(TypedDict):
     statisticsLimitedToRecordCount: bool
     statisticsType: StatisticsType | None
     businessName: str
-    statisticsLatestUpdate: datetime | None
+    statisticsLatestUpdate: datetime | str | None  # datetime after conversion
 
 
 StatisticsDict = dict[str, StatisticsInformationDict]

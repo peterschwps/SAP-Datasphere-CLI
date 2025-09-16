@@ -6,7 +6,11 @@ import requests
 from dateutil import tz
 
 from datasphere.automation import DatasphereAutomation
-from datasphere.custom_types import StatisticsDict, StatisticsType
+from datasphere.custom_types import (
+    StatisticsDict,
+    StatisticsInformationDict,
+    StatisticsType,
+)
 from utils.filehandler import settings
 from utils.logging import logger
 
@@ -18,7 +22,7 @@ DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
 
 
 class RemoteTables(DatasphereAutomation):
-    def __init__(self, session: requests.Session = None):
+    def __init__(self, session: requests.Session | None = None):
         # DatasphereAutomation initialisieren
         super().__init__(session)
 
@@ -37,23 +41,23 @@ class RemoteTables(DatasphereAutomation):
             f"/remotetables?includeBusinessNames=true",
             json={"includeBusinessNames": True},
         )
-        all_tables = {
-            table["tableName"]: {
+        all_tables: StatisticsDict = {}
+        for table in response.json()["tables"]:
+            statistics_information: StatisticsInformationDict = {
                 "statisticsSupported": table.get("statisticsSupported", True),
                 "statisticsLimitedToRecordCount": table.get(
                     "statisticsLimitedToRecordCount", False
                 ),
                 "statisticsType": table.get("statisticsType"),
-                "businessName": table.get("businessName"),
+                "businessName": table.get("businessName", ""),
                 "statisticsLatestUpdate": table.get("statisticsLatestUpdate"),
             }
-            for table in response.json()["tables"]
-        }
+            all_tables[table["tableName"]] = statistics_information
 
         # Alle Werte bei "statisticsLatestUpdate" in Datetime-Objekt mit
         # korrekter Zeitzone umwandeln
         for table in all_tables.values():
-            if table["statisticsLatestUpdate"]:
+            if isinstance(table["statisticsLatestUpdate"], str):
                 converted_dt = datetime.strptime(
                     table["statisticsLatestUpdate"],
                     "%Y-%m-%d %H:%M:%S.%f000000",

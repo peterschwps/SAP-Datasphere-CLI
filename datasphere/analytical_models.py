@@ -23,7 +23,7 @@ DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
 
 
 class AnalyticalModels(DatasphereAutomation):
-    def __init__(self, session: requests.Session = None):
+    def __init__(self, session: requests.Session | None = None):
         # DatasphereAutomation initialisieren
         super().__init__(session)
 
@@ -185,8 +185,12 @@ class AnalyticalModels(DatasphereAutomation):
 
         # Liste umdrehen, für Bottom-Up-Reihenfolge
         all_ids.reverse()
-        all_ids = {analytical_model_id: {val[0]: val[1] for val in all_ids}}
-        return all_ids
+        analytical_model_to_view_mapping = {
+            analytical_model_id: {
+                val[0]: val[1] for val in all_ids
+            }
+        }
+        return analytical_model_to_view_mapping
 
     def get_all_views_for_analytical_models(
         self, skip_duplicates: bool = False
@@ -525,7 +529,7 @@ class AnalyticalModels(DatasphereAutomation):
         def update_runtime(
             model_id: str,
             view_id: str,
-            runtime: int,
+            runtime: int | None,
             lock: threading.Lock | None = None,
         ) -> None:
             if lock:
@@ -695,7 +699,7 @@ class AnalyticalModels(DatasphereAutomation):
                         persist_and_unpersist_view,
                         deepcopy(self.session),
                         *view,
-                        lock,
+                        lock=lock,
                     )
 
         else:

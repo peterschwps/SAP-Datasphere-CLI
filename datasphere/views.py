@@ -23,7 +23,7 @@ DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
 
 
 class Views(DatasphereAutomation):
-    def __init__(self, session: requests.Session = None):
+    def __init__(self, session: requests.Session | None = None):
         # DatasphereAutomation initialisieren
         super().__init__(session)
 
@@ -1118,7 +1118,7 @@ class Views(DatasphereAutomation):
         log_id = response.json()["taskLogId"]
 
         # Funktion zum Abrufen der Log-Details
-        def fetch_log_details() -> list[dict]:
+        def fetch_log_details() -> dict:
             session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )

@@ -13,8 +13,10 @@ from rich.prompt import Prompt
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.events import (
+from selenium.webdriver.support.abstract_event_listener import (
     AbstractEventListener,
+)
+from selenium.webdriver.support.event_firing_webdriver import (
     EventFiringWebDriver,
 )
 from selenium.webdriver.support.wait import WebDriverWait
@@ -28,7 +30,7 @@ AUTHENTICATION_METHOD: str = settings["Setup"]["AUTHENTICATION_METHOD"]
 
 # Wichtige URLs aus Settings
 DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
-SUBDOMAIN: str = urlparse(DATASPHERE_URL).hostname.split(".")[0]
+SUBDOMAIN: str = urlparse(DATASPHERE_URL).hostname.split(".")[0]  # pyright: ignore[reportOptionalMemberAccess]
 SSO_URL: str = (
     f"https://{SUBDOMAIN}.authentication.eu10.hana.ondemand.com/saml/SSO/"
     f"alias/{SUBDOMAIN}.aws-live-eu10"
@@ -37,7 +39,7 @@ AUTH_URL: str = f"https://{SUBDOMAIN}.authentication.eu10.hana.ondemand.com"
 
 
 class DatasphereAutomation:
-    def __init__(self, session: requests.Session = None):
+    def __init__(self, session: requests.Session | None = None):
         # Requests Session initialisieren, falls noch nicht geschehen
         if session is not None:
             self.session = session
@@ -200,10 +202,19 @@ class DatasphereAutomation:
         response = self.session.get(
             url=f"{DATASPHERE_URL}/dwaas-core/index.html"
         )
-        oauth_url = re.search(r'location="([^"]+)"', response.text).group(1)
-        signature_cookie_value = re.search(
+        oauth_url_result = re.search(r'location="([^"]+)"', response.text)
+        if not oauth_url_result:
+            logger.critical("Fehler beim Parsen der OAuth URL.")
+            sys.exit(1)
+        oauth_url = oauth_url_result.group(1)
+
+        signature_cookie_value_result = re.search(
             r"signature=([^;]+)", response.text
-        ).group(1)
+        )
+        if not signature_cookie_value_result:
+            logger.critical("Fehler beim Parsen des Signature Cookies.")
+            sys.exit(1)
+        signature_cookie_value = signature_cookie_value_result.group(1)
 
         # Cookies setzen, die via sonst Javascript werden
         # (wichtig für Redirect nach erfolgreicher Authentifizierung)
@@ -243,7 +254,7 @@ class DatasphereAutomation:
 
         # SAML Link parsen
         soup = BeautifulSoup(response.text, "html.parser")
-        saml_url = f"{AUTH_URL}/" + soup.find("a")["href"]
+        saml_url = f"{AUTH_URL}/" + soup.find("a")["href"]  # type: ignore
 
         # 4. Request: https://<subdomain>.authentication.eu10.hana.ondemand.com/saml/discovery
         # Weiterleitung an: https://<subdomain>.authentication.eu10.hana.ondemand.com/saml/login/alias/<subdomain>.aws-live-eu10
@@ -275,9 +286,11 @@ class DatasphereAutomation:
             console.print("\nGeneriere MFA-Code...")
 
             # Config parsen
-            config_data = re.search(r"\$Config=({.*?});", response.text).group(
-                1
-            )
+            config_data_result = re.search(r"\$Config=({.*?});", response.text)
+            if not config_data_result:
+                logger.critical("Fehler beim Parsen der OAuth Config.")
+                sys.exit(1)
+            config_data = config_data_result.group(1)
             config_data = json.loads(config_data)
             correlation_id = config_data["correlationId"]
 
@@ -376,9 +389,11 @@ class DatasphereAutomation:
             response = self.session.post(url=login_url, data=data)
 
             # Neue Config parsen
-            config_data = re.search(r"\$Config=({.*?});", response.text).group(
-                1
-            )
+            config_data_result = re.search(r"\$Config=({.*?});", response.text)
+            if not config_data_result:
+                logger.critical("Fehler beim Parsen der OAuth Config.")
+                sys.exit(1)
+            config_data = config_data_result.group(1)
             config_data = json.loads(config_data)
 
             # 7. Request: https://login.microsoftonline.com/common/SAS/BeginAuth
@@ -500,10 +515,10 @@ class DatasphereAutomation:
 
         # Werte parsen
         soup = BeautifulSoup(response.text, "html.parser")
-        saml_response = soup.find("input", attrs={"name": "SAMLResponse"})[
+        saml_response = soup.find("input", attrs={"name": "SAMLResponse"})[  # type: ignore
             "value"
         ]
-        relay_state = soup.find("input", attrs={"name": "RelayState"})["value"]
+        relay_state = soup.find("input", attrs={"name": "RelayState"})["value"]  # type: ignore
 
         # 5. / 11. Request: https://<subdomain>.authentication.eu10.hana.ondemand.com/saml/SSO/alias/<subdomain>.aws-live-eu10
         # Weiterleitung an: https://<subdomain>.authentication.eu10.hana.ondemand.com/oauth/authorize
@@ -617,7 +632,10 @@ class DatasphereAutomation:
             ef_driver = EventFiringWebDriver(driver, listener)
 
             # Wait initialisieren
-            wait = WebDriverWait(ef_driver, timeout=300)
+            wait = WebDriverWait(
+                ef_driver,  # pyright: ignore[reportArgumentType]
+                timeout=300,
+            )
 
             # Homepage laden
             logger.debug(

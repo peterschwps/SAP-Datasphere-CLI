@@ -1,6 +1,7 @@
 import sys
 from collections.abc import Callable
 from time import sleep
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -96,14 +97,14 @@ class Menu:
         self.console.clear()
 
         # Variablen initialisieren
-        self.chosen_class = None
-        self.chosen_method = None
-        self.all_params = {}
+        self.chosen_class: type[Any] | None = None
+        self.chosen_method: Callable[..., Any] | None = None
+        self.all_params: dict[str, Any] = {}
 
     # Funktion um Menü anzuzeigen
     def show_menu(
         self, options: dict | None = None, is_first_menu: bool = True
-    ) -> tuple[Callable, Callable, dict]:
+    ) -> tuple[type[Any], Callable[..., Any], dict[str, Any]]:
         """
         Zeigt ein Menü mit einer Überschrift, einem Subtitel und einer Liste
         von Modulen an.
@@ -190,6 +191,8 @@ class Menu:
                     list(options.keys())[chosen_option_int - 1]
                 ]
                 self.set_params_for_method()
+                if self.chosen_class is None or self.chosen_method is None:
+                    raise RuntimeError("Menüauswahl unvollständig.")
                 return self.chosen_class, self.chosen_method, self.all_params
 
     def set_params_for_method(self) -> None:

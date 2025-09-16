@@ -12,7 +12,7 @@ SETTINGS_FILE = os.path.join(PROJECT_PATH, "settings.ini")
 
 # Format der Settings-Datei
 settings = configparser.ConfigParser()
-settings.optionxform = str
+settings.optionxform = str  # pyright: ignore[reportAttributeAccessIssue]
 
 # Settings erstellen, falls nicht vorhanden
 # TODO: anpassen siehe MentAI (mit allgemeinen User Config Path und ispath() Check)  # noqa: E501
