@@ -10,10 +10,10 @@ from uuid import uuid4
 import requests
 
 from datasphere.automation import DatasphereAutomation
-from utils.types import AnalyticalModelsDetailsDict
 from datasphere.views import Views
 from utils.filehandler import Datasphere, settings
 from utils.logging import logger
+from utils.types import AnalyticalModelsDetailsDict
 
 # Wichtige Bedingungen aus Settings
 URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
@@ -186,9 +186,7 @@ class AnalyticalModels(DatasphereAutomation):
         # Liste umdrehen, für Bottom-Up-Reihenfolge
         all_ids.reverse()
         analytical_model_to_view_mapping = {
-            analytical_model_id: {
-                val[0]: val[1] for val in all_ids
-            }
+            analytical_model_id: {val[0]: val[1] for val in all_ids}
         }
         return analytical_model_to_view_mapping
 

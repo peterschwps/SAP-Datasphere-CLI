@@ -6,13 +6,13 @@ import requests
 from dateutil import tz
 
 from datasphere.automation import DatasphereAutomation
+from utils.filehandler import settings
+from utils.logging import logger
 from utils.types import (
     StatisticsDict,
     StatisticsInformationDict,
     StatisticsType,
 )
-from utils.filehandler import settings
-from utils.logging import logger
 
 # Wichtige Bedingungen aus Settings
 URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]

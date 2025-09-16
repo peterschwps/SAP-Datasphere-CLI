@@ -11,9 +11,9 @@ import pandas as pd
 import requests
 
 from datasphere.automation import DatasphereAutomation
-from utils.types import ViewDetailsDict
 from utils.filehandler import Datasphere, settings
 from utils.logging import logger
+from utils.types import ViewDetailsDict
 
 # Wichtige Bedingungen aus Settings
 URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
