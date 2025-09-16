@@ -75,9 +75,15 @@ class MultiLineformatter(logging.Formatter):
         except AttributeError:
             multiline_message = False
 
-        # Set msg to empty string (unless it is an exception)
+        # Preserve original msg/args to avoid mutating the record across handlers
+        original_msg = record.msg
+        original_args = record.args
+
+        # Set msg to empty string (unless it is an exception) and clear args
+        # to prevent logging from attempting string interpolation on an empty msg
         if not is_exception:
             record.msg = ""
+            record.args = None
 
         # Format record (with empty message)
         header = super().format(record)
@@ -118,10 +124,11 @@ class MultiLineformatter(logging.Formatter):
             # handled like a normal record object)
             return self.format(record)
 
-        # Set msg back to original message
-        record.msg = message
+        # Restore original msg/args so other handlers see the unmodified record
+        record.msg = original_msg
+        record.args = original_args
 
-        # Concatenate header and record.msg
+        # Concatenate header and computed message
         log_message = header + msg
         return f"[{FORMATS[record.levelno]}]{log_message}[/]"
 
