@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 # Create formatter class for multiline strings
-class MultiLineformatter(logging.Formatter):
+class MultiLineFormatter(logging.Formatter):
     """
     Formatter Class to handle multi-line messages, inherits from the logging
     module.
@@ -75,17 +75,17 @@ class MultiLineformatter(logging.Formatter):
         except AttributeError:
             multiline_message = False
 
-        # Preserve original msg/args to avoid mutating the record across handlers
+        # Save original msg/args to avoid mutating the record across handlers
         original_msg = record.msg
         original_args = record.args
 
         # Set msg to empty string (unless it is an exception) and clear args
-        # to prevent logging from attempting string interpolation on an empty msg
+        # to prevent %-formatting on an empty msg
         if not is_exception:
             record.msg = ""
             record.args = None
 
-        # Format record (with empty message)
+        # Format record (with empty message) to create header
         header = super().format(record)
 
         # Indent message by length of header (record without message)
@@ -144,7 +144,7 @@ class RichPrintHandler(logging.StreamHandler):
 
 
 # Set up formatters
-FILE_FORMAT = MultiLineformatter(
+FILE_FORMAT = MultiLineFormatter(
     fmt="{asctime}.{msecs:03.0f} | {levelname:^15s} | {filename:^30s} |"
     + "{:^20s}".format("Line: {lineno:04}")
     + "| {message}",
@@ -152,7 +152,7 @@ FILE_FORMAT = MultiLineformatter(
     style="{",
 )
 
-STREAM_FORMAT = MultiLineformatter(
+STREAM_FORMAT = MultiLineFormatter(
     fmt="{asctime}.{msecs:03.0f} | {levelname:^10s}" + "| {message}",
     datefmt="%Y-%m-%d | %H:%M:%S",
     style="{",
