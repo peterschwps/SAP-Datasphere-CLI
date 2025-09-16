@@ -21,12 +21,25 @@ from selenium.webdriver.support.event_firing_webdriver import (
 )
 from selenium.webdriver.support.wait import WebDriverWait
 
-from utils.filehandler import COOKIES_FILE, settings
+from utils.filehandler import COOKIES_FILE, PROJECT_PATH, settings
 from utils.logging import logger
 
 # Wichtige Bedingungen aus Settings
 URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
 AUTHENTICATION_METHOD: str = settings["Setup"]["AUTHENTICATION_METHOD"]
+BROWSER_TO_USE: str = settings["Setup"]["BROWSER_TO_USE"]  # TODO: Check ob gültiger Wert noch implementieren  # noqa: E501
+
+# Mapping of BROWSER_TO_USE to webdriver classes
+BROWSER_MAPPING = {
+    "CHROME": {
+        "driver": webdriver.Chrome,
+        "options": webdriver.ChromeOptions,
+    },
+    "EDGE": {
+        "driver": webdriver.Edge,
+        "options": webdriver.EdgeOptions,
+    },
+}
 
 # Wichtige URLs aus Settings
 DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
@@ -54,6 +67,9 @@ class DatasphereAutomation:
         Lädt Cookies aus der COOKIES_FILE, falls diese existiert oder
         initialisiert eine erneute Anmeldung.
         """
+
+        # TODO: noch allgemeines Error Handling, dass Cookies löscht und 
+        # User benachrichtigt, dass er neustarten soll
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -562,71 +578,40 @@ class DatasphereAutomation:
         Lädt Cookies aus dem Browser und schließt ihn dann wieder.
         """
 
-        # TODO: als Idee: edge://version/ bzw. chrome://version/ manuell öffnen
-        #       und Profillink in Settings Datei kopieren
-        #       dann Profil mit Selenium laden?
-
         # Event Listener um alle Cookies zu speichern (da get_cookies() sonst
         # nur Cookies von aktueller Seite abruft)
-        # TODO: macht momentan keinen Sinn, weil Session nicht persistent ist,
-        #       nur eine Stunde
         class CookieListener(AbstractEventListener):
             def __init__(self):
                 self.all_cookies = []
 
-            def after_navigate_to(self, url, driver):
+            def after_navigate_to(self, _, driver):
+                """
+                Wird nach jeder Navigation aufgerufen.
+                ABER: Die Cookies der geladenen Seite müssen explizit 
+                abgespeichert werden.
+
+                Args:
+                    _ (Any): Unused arguments.
+                    driver (WebDriver): WebDriver to add listener to.
+                """
                 self.all_cookies.extend(driver.get_cookies())
 
         # WebDriver Einstellungen konfigurieren
-        options = webdriver.EdgeOptions()
+        options = BROWSER_MAPPING[BROWSER_TO_USE]["options"]()
         options.add_argument("--log-level=CRITICAL")
         options.add_argument("start-maximized")
-        options.add_argument("-inprivate")
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
-        # TODO: Hier prüfen, ob Cookies noch funktionieren
-        # Funktioniert aktuell nur so halb, nochmal mehr testen
-        # Geht evtl. mit Playwright auch einfacher
-        # Selenium kann nur Cookies von aktueller Website laden
-        # bessere Idee: erst alle Cookies aus Datei filtern, jeweilige Domains einmal laden und dann alle Cookies reinladen  # noqa: E501
-        # sonst lädt er aktuell die gleiche Seite 20 mal
-        # with webdriver.Edge(options=options) as driver:
-
-        #     # Cookies in Browser laden
-        #     all_cookies = []
-        #     with open(COOKIES_FILE, "r") as cookie_file:
-        #         cookies = json.load(cookie_file)
-        #         for cookie in cookies:
-        #             if "login.microsoftonline.com" in cookie["domain"]:
-        #                 driver.get(url=f"https://{cookie['domain'].strip('.')}")
-        #                 driver.add_cookie({
-        #                     "name": cookie["name"],
-        #                     "value": cookie["value"],
-        #                     "domain": cookie["domain"],
-        #                     "path": cookie["path"],
-        #                     "secure": cookie["secure"]
-        #                 })
-
-        #     # Wait initialisieren
-        #     wait = WebDriverWait(driver, timeout=300)
-
-        #     # Homepage laden
-        #     driver.get(url=DATASPHERE_URL)
-        #     loaded = wait.until(EC.text_to_be_present_in_element((By.ID, "__title0"), "SAP Datasphere"))  # noqa: E501
-
-        #     # Aktualisierte Cookies überschreiben, neue Cookies hinzufügen
-        #     if loaded:
-        #         for cookie in driver.get_cookies():
-        #             for num, stored_cookie in enumerate(all_cookies):
-        #                 if cookie["name"] == stored_cookie["name"] and cookie["domain"] == stored_cookie["domain"]:  # noqa: E501
-        #                     all_cookies[num] = cookie
-        #                     break
-        #             else:
-        #                 all_cookies.append(cookie)
-        #         return
+        # Pfad für Browser Profile erstellen/setzen
+        browser_data_path = PROJECT_PATH + "/." + BROWSER_TO_USE.lower()
+        if not os.path.exists(browser_data_path):
+            os.mkdir(browser_data_path)
+        options.add_argument(f"user-data-dir={browser_data_path}")
 
         # WebDriver und WebDriverWait initialisieren
-        with webdriver.Edge(options=options) as driver:
+        with BROWSER_MAPPING[BROWSER_TO_USE]["driver"](
+            options=options
+        ) as driver:
             # CookieListener und EventFiringWebDriver initialisieren
             listener = CookieListener()
             ef_driver = EventFiringWebDriver(driver, listener)
@@ -648,13 +633,18 @@ class DatasphereAutomation:
                     (By.ID, "__title0"), "SAP Datasphere"
                 )
             )
-
-            # Cookies speichern
-            logger.info("Speichere Cookies...")
-            sleep(3)  # für zusätzliche Sicherheit
             listener.all_cookies.extend(
                 ef_driver.get_cookies()
-            )  # um Datasphere Cookies hinzuzufügen
+            )  # WICHTIG: um Datasphere Cookies hinzuzufügen
+            sleep(5)
+
+            # WICHTIG: um persistente Microsoft Auth-Cookies zu erhalten
+            logger.debug("Lade Microsoft Login...")
+            ef_driver.get(url="https://login.microsoftonline.com")
+            sleep(5)  # für zusätzliche Sicherheit
+            
+            # Cookies speichern
+            logger.info("Speichere Cookies...")
             with open(COOKIES_FILE, "w") as cookie_file:
                 json.dump(
                     listener.all_cookies,
