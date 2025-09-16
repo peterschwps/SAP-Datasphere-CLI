@@ -6,7 +6,7 @@ import requests
 from dateutil import tz
 
 from datasphere.automation import DatasphereAutomation
-from datasphere.custom_types import (
+from utils.types import (
     StatisticsDict,
     StatisticsInformationDict,
     StatisticsType,

@@ -11,7 +11,7 @@ import pandas as pd
 import requests
 
 from datasphere.automation import DatasphereAutomation
-from datasphere.custom_types import ViewDetailsDict
+from utils.types import ViewDetailsDict
 from utils.filehandler import Datasphere, settings
 from utils.logging import logger
 

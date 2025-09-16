@@ -10,7 +10,7 @@ from uuid import uuid4
 import requests
 
 from datasphere.automation import DatasphereAutomation
-from datasphere.custom_types import AnalyticalModelsDetailsDict
+from utils.types import AnalyticalModelsDetailsDict
 from datasphere.views import Views
 from utils.filehandler import Datasphere, settings
 from utils.logging import logger
