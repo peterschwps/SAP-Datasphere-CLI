@@ -28,6 +28,8 @@ if not os.path.isfile(SETTINGS_FILE):
         "URL_TO_USE": "DATASPHERE_PROD_URL",
         # REQUESTS oder BROWSER
         "AUTHENTICATION_METHOD": "REQUESTS",
+        # CHROME oder EDGE
+        "BROWSER_TO_USE": "CHROME",
     }
     with open(SETTINGS_FILE, "w") as settings_file:
         settings.write(settings_file)

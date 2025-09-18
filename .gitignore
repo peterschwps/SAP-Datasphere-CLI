@@ -1,10 +1,14 @@
 # Directories
 __pycache__/
 .vscode/
+.chrome/
+.edge/
+.logs/
+.playwright/
+.ruff_cache/
 
 # Files
 .cookies.json
-*.log
 datasphere/exports/*
 datasphere/results/*
 datasphere/tasks/*

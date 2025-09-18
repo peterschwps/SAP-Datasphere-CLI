@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 from rich import get_console
 from rich.prompt import Prompt
 from selenium import webdriver
@@ -21,12 +22,28 @@ from selenium.webdriver.support.event_firing_webdriver import (
 )
 from selenium.webdriver.support.wait import WebDriverWait
 
-from utils.filehandler import COOKIES_FILE, settings
+from utils.filehandler import COOKIES_FILE, PROJECT_PATH, settings
 from utils.logging import logger
 
 # Wichtige Bedingungen aus Settings
 URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
 AUTHENTICATION_METHOD: str = settings["Setup"]["AUTHENTICATION_METHOD"]
+BROWSER_TO_USE: str = settings["Setup"][
+    "BROWSER_TO_USE"
+]  # TODO: Check ob gültiger Wert noch implementieren  # noqa: E501
+
+# Mapping of BROWSER_TO_USE to webdriver classes
+BROWSER_MAPPING = {
+    "CHROME": {
+        "driver": webdriver.Chrome,
+        "options": webdriver.ChromeOptions,
+    },
+    "EDGE": {
+        "driver": webdriver.Edge,
+        "options": webdriver.EdgeOptions,
+    },
+    "PLAYWRIGHT": None,
+}
 
 # Wichtige URLs aus Settings
 DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
@@ -40,20 +57,24 @@ AUTH_URL: str = f"https://{SUBDOMAIN}.authentication.eu10.hana.ondemand.com"
 
 class DatasphereAutomation:
     def __init__(self, session: requests.Session | None = None):
-        # Requests Session initialisieren, falls noch nicht geschehen
+        """
+        Initialisiert die Datasphere Automation, falls noch keine Session
+        existiert.
+        """
         if session is not None:
             self.session = session
         else:
-            self._initialize_requests_session()
+            self._initialize_datasphere_session()
 
-    def _initialize_requests_session(self) -> None:
+    def _initialize_datasphere_session(self) -> None:
         """
-        Initialisiert die Requests Session für alle weiteren Methoden.
-        Nutzt die ausgewählte Authentifizierungsmethode per Requests oder
-        Selenium.
+        Initialisiert die Datasphere Session für alle weiteren Methoden.
         Lädt Cookies aus der COOKIES_FILE, falls diese existiert oder
         initialisiert eine erneute Anmeldung.
         """
+
+        # TODO: noch allgemeines Error Handling, dass Cookies löscht und
+        # User benachrichtigt, dass er neustarten soll
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -75,6 +96,7 @@ class DatasphereAutomation:
         # Cookies laden, falls Datei existiert
         if os.path.isfile(COOKIES_FILE):
             logger.info("Lade Cookies aus vorheriger Session...")
+            # TODO: vielleicht nicht alle Cookies laden, sondern nur ESTAUTH
             with open(COOKIES_FILE) as cookie_file:
                 cookies = json.load(cookie_file)
                 for cookie in cookies:
@@ -92,9 +114,11 @@ class DatasphereAutomation:
                 params={"action": "logon"},
             )
 
-            # Falls Cookies abgelaufen, Login starten
+            # Falls Cookies abgelaufen sind
             if response.headers.get("X-Csrf-Token") is None:
-                logger.debug("Gespeicherte Cookies sind abgelaufen.")
+                logger.debug(
+                    "Datasphere Session ist abgelaufen. Starte neue Session..."
+                )
 
             # Sonst Headers setzen und Initialisierung beenden
             else:
@@ -107,34 +131,12 @@ class DatasphereAutomation:
                 )
                 return
 
+        # Falls keine Cookies gefunden wurden
         else:
             logger.debug("Keine Cookies gefunden.")
 
-        # Login starten
-        if AUTHENTICATION_METHOD.upper() == "REQUESTS":
-            logger.debug("Starte Microsoft SSO Login per Requests...")
-            self._start_sso_login()
-
-        elif AUTHENTICATION_METHOD.upper() == "BROWSER":
-            logger.debug("Starte Login per Browser...")
-            self._start_browser_login()
-            with open(COOKIES_FILE) as cookie_file:
-                cookies = json.load(cookie_file)
-                for cookie in cookies:
-                    self.session.cookies.set(
-                        name=cookie["name"],
-                        value=cookie["value"],
-                        domain=cookie["domain"],
-                        path=cookie["path"],
-                        secure=cookie["secure"],
-                    )
-
-        else:
-            logger.critical(
-                "Ungültige Authentifizierungsmethode. "
-                "Bitte in settings.env überprüfen."
-            )
-            sys.exit(1)
+        # Authentifizierung/Refresh starten
+        self._refresh_session()
 
         # Prüfen, ob Login erfolgreich
         self.session.headers.update(
@@ -154,9 +156,10 @@ class DatasphereAutomation:
         # Falls Anmeldung fehlgeschlagen (Cookies abgelaufen),
         # Browser erneut starten und Cookies laden
         if response.headers.get("X-Csrf-Token") is None:
-            logger.critical("Unbekannter Fehler. Bitte erneut starten...")
+            logger.critical("Unbekannter Fehler. Entferne Cookies...")
             if os.path.isfile(COOKIES_FILE):
                 os.remove(COOKIES_FILE)
+            logger.error("Bitte erneut starten...")
             sys.exit(1)
 
         # Headers setzen
@@ -169,18 +172,69 @@ class DatasphereAutomation:
             }
         )
 
-    def _start_sso_login(self) -> None:
+    def _start_login(
+        self, response: requests.Response
+    ) -> tuple[bool, requests.Response]:
         """
-        Startet den SSO Login für Datasphere via Micrsoft.
-        Sendet einen Code an die Authenticator App von Microsoft, falls
-        erforderlich. Fragt dafür Username und Passwort per Prompt der Rich
-        Console ab.
-        Falls die Microsoft Login-Session weiterhin aktiv ist, wird der Login
-        automatisch durchgeführt.
-        """
+        Startet den Login per Requests oder Browser.
+        Nutzt dafür den Wert aus der Settings-Datei.
 
-        # Globale Rich Console speichern
-        console = get_console()
+        Lädt nach erfolgreicher Browser-Authentifizierung alle Cookies in die
+        Requests Session.
+
+        Returns:
+            tuple[bool, requests.Response]: Bei Requests True als Indikator,
+                                            dass der Flow weiter fortgeführt
+                                            werden muss (damit persistente
+                                            Auth-Cookies gespeichert werden.)
+                                            Bei Browser False, um den weiteren
+                                            Refresh-Session-Flow direkt zu
+                                            beenden.
+                                            Bei Requests wird die letzte
+                                            Response zurückgegeben. Bei Browser
+                                            wird derselbe Parameter
+                                            zurückgegeben, der als Input
+                                            übergeben wurde.
+        """  # TODO: nochmal gucken, wie Docstring richtig formatieren, sieht komisch aus in Schnellübersicht  # noqa: E501
+        if AUTHENTICATION_METHOD.upper() == "REQUESTS":
+            logger.debug("Starte Microsoft SSO Login per Requests...")
+            response = self._start_requests_authentication(response)
+            return True, response
+
+        elif AUTHENTICATION_METHOD.upper() == "BROWSER":
+            if BROWSER_TO_USE.upper() == "PLAYWRIGHT":
+                logger.debug("Starte Login per Playwright...")
+                self._start_browser_login_playwright()
+            else:
+                logger.debug("Starte Login per Browser...")
+                self._start_browser_authentication()
+            with open(COOKIES_FILE) as cookie_file:
+                cookies = json.load(cookie_file)
+                for cookie in cookies:
+                    self.session.cookies.set(
+                        name=cookie["name"],
+                        value=cookie["value"],
+                        domain=cookie["domain"],
+                        path=cookie["path"],
+                        secure=cookie["secure"],
+                    )
+            return False, response
+
+        else:
+            logger.critical(
+                "Ungültige Authentifizierungsmethode. "
+                "Bitte in settings.env überprüfen."
+            )
+            sys.exit(1)
+
+    def _refresh_session(self) -> None:
+        """
+        Aktualisiert die Datasphere Session mit den persistenten Auth-Cookies.
+        Speichert die aktualisierten Cookies ab.
+
+        Startet automatisch den vollen Authentifizierungsflow, falls die
+        Auth-Cookies abgelaufen sind oder keine Cookies existieren.
+        """
 
         # Wichtig: User-Agent muss Edge sein, sonst ist der Flow anders
         for header in ("Priority", "X-Csrf-Token", "X-Requested-With"):
@@ -264,254 +318,13 @@ class DatasphereAutomation:
 
         # Prüfen, ob Bestätigung per MFA erforderlich
         # (nicht mehr im Hintergrund angemeldet)
+        # --> Login starten
         if "<title>Working...</title>" not in response.text:
-            # Kurze Meldung und Zeit zum lesen
-            logger.debug("Bestätigung per MFA erforderlich...\n\n")
-            sleep(2)
+            proceed, response = self._start_login(response)
 
-            # Prompt für Username und Password via Rich
-            prompt = Prompt()
-            console.print(
-                "Bitte E-Mail-Adresse zur Anmeldung via Microsoft SSO "
-                "eingeben."
-            )
-            email = prompt.ask("\nE-Mail-Adresse")
-            console.print("\nBitte Passwort des Microsoft Kontos eingeben.")
-            console.print(
-                "Achtung: Die Eingabe ist maskiert und wird deshalb nicht "
-                "angezeigt.",
-                style="bold yellow",
-            )
-            password = prompt.ask("\nPasswort", password=True)
-            console.print("\nGeneriere MFA-Code...")
-
-            # Config parsen
-            config_data_result = re.search(r"\$Config=({.*?});", response.text)
-            if not config_data_result:
-                logger.critical("Fehler beim Parsen der OAuth Config.")
-                sys.exit(1)
-            config_data = config_data_result.group(1)
-            config_data = json.loads(config_data)
-            correlation_id = config_data["correlationId"]
-
-            # 5. Request: https://login.microsoftonline.com/common/GetCredentialType?mkt=de-DE
-            # TODO: Params parsen?
-            url = "https://login.microsoftonline.com/common/GetCredentialType?mkt=de-DE"
-            data = {
-                "username": email,
-                "isOtherIdpSupported": True,
-                "checkPhones": False,
-                "isRemoteNGCSupported": True,
-                "isCookieBannerShown": False,
-                "isFidoSupported": True,
-                "originalRequest": config_data["sCtx"],
-                "country": "DE",
-                "forceotclogin": False,
-                "isExternalFederationDisallowed": False,
-                "isRemoteConnectSupported": False,
-                "federationFlags": 0,
-                "isSignup": False,
-                "flowToken": config_data["sFT"],
-                "isAccessPassSupported": True,
-                "isQrCodePinSupported": True,
-            }
-            self.session.headers.update(
-                {
-                    "hpgid": str(config_data["hpgid"]),
-                    "hpgact": str(config_data["hpgact"]),
-                    "canary": config_data["apiCanary"],
-                    "client-request-id": correlation_id,
-                    "Accept": "application/json",
-                    "hpgrequestid": config_data["sessionId"],
-                    "DNT": "1",
-                    "Origin": "https://login.microsoftonline.com",
-                    "Referer": response.url,
-                }
-            )
-            response = self.session.post(url=url, json=data)
-            flow_token = response.json()["FlowToken"]
-
-            # Headers wieder entfernen
-            for header in (
-                "hpgid",
-                "hpgact",
-                "canary",
-                "client-request-id",
-                "hpgrequestid",
-            ):
-                self.session.headers.pop(header)
-
-            # 6. Request: https://login.microsoftonline.com/<tenant_id>/login
-            login_url = config_data["urlPost"]
-            i19 = randint(12000, 20000)
-            data = {
-                "i13": 0,
-                "login": email,
-                "loginfmt": email,
-                "type": 11,
-                "LoginOptions": 3,
-                "lrt": "",
-                "lrtPartition": "",
-                "hisRegion": "",
-                "hisScaleUnit": "",
-                "passwd": password,
-                "ps": 2,
-                "psRNGCDefaultType": "",
-                "psRNGCEntropy": "",
-                "psRNGCSLK": "",
-                "canary": config_data["canary"],
-                "ctx": config_data["sCtx"],
-                "hpgrequestid": config_data["sessionId"],
-                "flowToken": flow_token,
-                "PPSX": "",
-                "NewUser": 1,
-                "FoundMSAs": "",
-                "fspost": 0,
-                "i21": 0,
-                "CookieDisclosure": 0,
-                "IsFidoSupported": 1,
-                "isSignupPost": 0,
-                "DfpArtifact": "",
-                "i19": i19,
-            }
-            self.session.headers.update(
-                {
-                    "Origin": "https://login.microsoftonline.com",
-                    "DNT": "1",
-                    "Upgrade-Insecure-Requests": "1",
-                    "Accept": (
-                        "text/html,application/xhtml+xml,application/xml;"
-                        "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,"
-                        "application/signed-exchange;v=b3;q=0.7"
-                    ),
-                }
-            )
-            response = self.session.post(url=login_url, data=data)
-
-            # Neue Config parsen
-            config_data_result = re.search(r"\$Config=({.*?});", response.text)
-            if not config_data_result:
-                logger.critical("Fehler beim Parsen der OAuth Config.")
-                sys.exit(1)
-            config_data = config_data_result.group(1)
-            config_data = json.loads(config_data)
-
-            # 7. Request: https://login.microsoftonline.com/common/SAS/BeginAuth
-            begin_auth_url = (
-                "https://login.microsoftonline.com/common/SAS/BeginAuth"
-            )
-            data = {
-                "AuthMethodId": "PhoneAppNotification",
-                "Method": "BeginAuth",
-                "ctx": config_data["sCtx"],
-                "flowToken": config_data["sFT"],
-            }
-            self.session.headers.update(
-                {
-                    "hpgid": str(config_data["hpgid"]),
-                    "hpgact": str(config_data["hpgact"]),
-                    "canary": config_data["apiCanary"],
-                    "client-request-id": config_data["correlationId"],
-                    "Accept": "application/json",
-                    "hpgrequestid": config_data["sessionId"],
-                    "Origin": "https://login.microsoftonline.com",
-                    "Referer": response.url,
-                }
-            )
-            response = self.session.post(url=begin_auth_url, json=data)
-            auth_data = response.json()
-
-            # Authenticator Code ausgeben
-            if str(auth_data["Entropy"]) == 0:
-                console.print(
-                    "Unbekannter Fehler. Bitte erneut starten.",
-                    style="bold red",
-                )
-                sys.exit()
-            entropy = auth_data["Entropy"]
-            console.print(f"Authenticator Code: {entropy}", style="bold green")
-
-            # 8. Request: https://login.microsoftonline.com/common/SAS/EndAuth
-            end_auth_url = (
-                "https://login.microsoftonline.com/common/SAS/EndAuth"
-            )
-            poll_count = 1
-            params = {
-                "authMethodId": "PhoneAppNotification",
-                "pollCount": poll_count,
-            }
-            self.session.headers.update(
-                {
-                    "x-ms-flowToken": auth_data["FlowToken"],
-                    "x-ms-ctx": auth_data["Ctx"],
-                    "client-request-id": auth_data["CorrelationId"],
-                    "x-ms-sessionId": auth_data["SessionId"],
-                }
-            )
-
-            # 9. Request (und weitere Requests) um Stand der MFA zu prüfen
-            console.print("\nWarte auf Bestätigung...")
-            last_poll_start_time = None
-            last_poll_end_time = None
-            flow_token = None
-            ctx = None
-            while True:
-                last_poll_start_time = round(time() * 1000)
-                challenge_data = self.session.get(
-                    url=end_auth_url, params=params
-                ).json()
-                last_poll_end_time = round(time() * 1000)
-                if challenge_data["ResultValue"] != "AuthenticationPending":
-                    flow_token = challenge_data["FlowToken"]
-                    ctx = challenge_data["Ctx"]
-                    break
-                params["lastPollStart"] = last_poll_start_time
-                params["lastPollEnd"] = last_poll_end_time
-                sleep(1)
-            console.print("Bestätigung erhalten.\n\n", style="bold green")
-
-            # 10. Request: https://login.microsoftonline.com/common/SAS/ProcessAuth
-            process_auth_url = (
-                "https://login.microsoftonline.com/common/SAS/ProcessAuth"
-            )
-            data = {
-                "type": 22,
-                "request": ctx,
-                "mfaLastPollStart": last_poll_start_time,
-                "mfaLastPollEnd": last_poll_end_time,
-                "mfaAuthMethod": "PhoneAppNotification",
-                "login": email,
-                "flowToken": flow_token,
-                "hpgrequestid": response.headers["x-ms-request-id"],
-                "sacxt": "",
-                "hideSmsInMfaProofs": False,
-                "canary": config_data["canary"],
-                "i19": i19 + randint(500, 1000),
-            }
-            for headers in (
-                "hpgid",
-                "hpgact",
-                "canary",
-                "client-request-id",
-                "hpgrequestid",
-                "x-ms-flowToken",
-                "x-ms-ctx",
-                "x-ms-sessionId",
-            ):
-                self.session.headers.pop(headers)
-            self.session.headers.update(
-                {
-                    "Origin": "https://login.microsoftonline.com",
-                    "Upgrade-Insecure-Requests": "1",
-                    "Accept": (
-                        "text/html,application/xhtml+xml,application/xml;"
-                        "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,"
-                        "application/signed-exchange;v=b3;q=0.7"
-                    ),
-                }
-            )
-            response = self.session.post(url=process_auth_url, data=data)
-            self.session.headers.pop("Origin")
+            # Falls Browser-Login durchgeführt wurde
+            if not proceed:
+                return
 
         # Werte parsen
         soup = BeautifulSoup(response.text, "html.parser")
@@ -555,78 +368,314 @@ class DatasphereAutomation:
         ):
             self.session.headers.pop(header)
 
-    def _start_browser_login(self) -> None:
+    def _start_requests_authentication(
+        self, response: requests.Response
+    ) -> requests.Response:
         """
-        Konfiguriert den Selenium Browser und öffnet Edge zur manuellen
-        Anmeldung.
+        Startet den Microsoft SSO Login per Requests.
+        Sendet einen Code an die Authenticator App von Microsoft. Fragt dafür
+        Username und Passwort per Prompt der Rich Console ab.
+
+        Args:
+            response (requests.Response): Reponse der letzten vorherigen
+                                          Anfrage (Konfiguration für MFA).
+
+        Returns:
+            requests.Response: Response der letzten Anfrage (Auth-Verarbeitung
+                               nach erfolgreicher MFA).
+        """
+
+        # Globale Rich Console speichern
+        console = get_console()
+
+        # Kurze Meldung und Zeit zum lesen
+        logger.debug("Bestätigung per MFA erforderlich...\n\n")
+        sleep(2)
+
+        # Prompt für Username und Password via Rich
+        prompt = Prompt()
+        console.print(
+            "Bitte E-Mail-Adresse zur Anmeldung via Microsoft SSO eingeben."
+        )
+        email = prompt.ask("\nE-Mail-Adresse").strip()
+        console.print("\nBitte Passwort des Microsoft Kontos eingeben.")
+        console.print(
+            "Achtung: Die Eingabe ist maskiert und wird deshalb nicht "
+            "angezeigt.",
+            style="bold yellow",
+        )
+        password = prompt.ask("\nPasswort", password=True)
+        console.print("\nGeneriere MFA-Code...")
+
+        # Config parsen
+        config_data_result = re.search(r"\$Config=({.*?});", response.text)
+        if not config_data_result:
+            logger.critical("Fehler beim Parsen der OAuth Config.")
+            sys.exit(1)
+        config_data = config_data_result.group(1)
+        config_data = json.loads(config_data)
+        correlation_id = config_data["correlationId"]
+
+        # 5. Request: https://login.microsoftonline.com/common/GetCredentialType?mkt=de-DE
+        # TODO: Params parsen?
+        url = "https://login.microsoftonline.com/common/GetCredentialType?mkt=de-DE"
+        data = {
+            "username": email,
+            "isOtherIdpSupported": True,
+            "checkPhones": False,
+            "isRemoteNGCSupported": True,
+            "isCookieBannerShown": False,
+            "isFidoSupported": True,
+            "originalRequest": config_data["sCtx"],
+            "country": "DE",
+            "forceotclogin": False,
+            "isExternalFederationDisallowed": False,
+            "isRemoteConnectSupported": False,
+            "federationFlags": 0,
+            "isSignup": False,
+            "flowToken": config_data["sFT"],
+            "isAccessPassSupported": True,
+            "isQrCodePinSupported": True,
+        }
+        self.session.headers.update(
+            {
+                "hpgid": str(config_data["hpgid"]),
+                "hpgact": str(config_data["hpgact"]),
+                "canary": config_data["apiCanary"],
+                "client-request-id": correlation_id,
+                "Accept": "application/json",
+                "hpgrequestid": config_data["sessionId"],
+                "DNT": "1",
+                "Origin": "https://login.microsoftonline.com",
+                "Referer": response.url,
+            }
+        )
+        response = self.session.post(url=url, json=data)
+        flow_token = response.json()["FlowToken"]
+
+        # Headers wieder entfernen
+        for header in (
+            "hpgid",
+            "hpgact",
+            "canary",
+            "client-request-id",
+            "hpgrequestid",
+        ):
+            self.session.headers.pop(header)
+
+        # 6. Request: https://login.microsoftonline.com/<tenant_id>/login
+        login_url = config_data["urlPost"]
+        i19 = randint(12000, 20000)
+        data = {
+            "i13": 0,
+            "login": email,
+            "loginfmt": email,
+            "type": 11,
+            "LoginOptions": 3,
+            "lrt": "",
+            "lrtPartition": "",
+            "hisRegion": "",
+            "hisScaleUnit": "",
+            "passwd": password,
+            "ps": 2,
+            "psRNGCDefaultType": "",
+            "psRNGCEntropy": "",
+            "psRNGCSLK": "",
+            "canary": config_data["canary"],
+            "ctx": config_data["sCtx"],
+            "hpgrequestid": config_data["sessionId"],
+            "flowToken": flow_token,
+            "PPSX": "",
+            "NewUser": 1,
+            "FoundMSAs": "",
+            "fspost": 0,
+            "i21": 0,
+            "CookieDisclosure": 0,
+            "IsFidoSupported": 1,
+            "isSignupPost": 0,
+            "DfpArtifact": "",
+            "i19": i19,
+        }
+        self.session.headers.update(
+            {
+                "Origin": "https://login.microsoftonline.com",
+                "DNT": "1",
+                "Upgrade-Insecure-Requests": "1",
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;"
+                    "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,"
+                    "application/signed-exchange;v=b3;q=0.7"
+                ),
+            }
+        )
+        response = self.session.post(url=login_url, data=data)
+
+        # Neue Config parsen
+        config_data_result = re.search(r"\$Config=({.*?});", response.text)
+        if not config_data_result:
+            logger.critical("Fehler beim Parsen der OAuth Config.")
+            sys.exit(1)
+        config_data = config_data_result.group(1)
+        config_data = json.loads(config_data)
+
+        # 7. Request: https://login.microsoftonline.com/common/SAS/BeginAuth
+        begin_auth_url = (
+            "https://login.microsoftonline.com/common/SAS/BeginAuth"
+        )
+        data = {
+            "AuthMethodId": "PhoneAppNotification",
+            "Method": "BeginAuth",
+            "ctx": config_data["sCtx"],
+            "flowToken": config_data["sFT"],
+        }
+        self.session.headers.update(
+            {
+                "hpgid": str(config_data["hpgid"]),
+                "hpgact": str(config_data["hpgact"]),
+                "canary": config_data["apiCanary"],
+                "client-request-id": config_data["correlationId"],
+                "Accept": "application/json",
+                "hpgrequestid": config_data["sessionId"],
+                "Origin": "https://login.microsoftonline.com",
+                "Referer": response.url,
+            }
+        )
+        response = self.session.post(url=begin_auth_url, json=data)
+        auth_data = response.json()
+
+        # Authenticator Code ausgeben
+        if str(auth_data["Entropy"]) == 0:
+            console.print(
+                "Unbekannter Fehler. Bitte erneut starten.",
+                style="bold red",
+            )
+            sys.exit()
+        entropy = auth_data["Entropy"]
+        console.print(f"Authenticator Code: {entropy}", style="bold green")
+
+        # 8. Request: https://login.microsoftonline.com/common/SAS/EndAuth
+        end_auth_url = "https://login.microsoftonline.com/common/SAS/EndAuth"
+        poll_count = 1
+        params = {
+            "authMethodId": "PhoneAppNotification",
+            "pollCount": poll_count,
+        }
+        self.session.headers.update(
+            {
+                "x-ms-flowToken": auth_data["FlowToken"],
+                "x-ms-ctx": auth_data["Ctx"],
+                "client-request-id": auth_data["CorrelationId"],
+                "x-ms-sessionId": auth_data["SessionId"],
+            }
+        )
+
+        # 9. Request (und weitere Requests) um Stand der MFA zu prüfen
+        console.print("\nWarte auf Bestätigung...")
+        last_poll_start_time = None
+        last_poll_end_time = None
+        flow_token = None
+        ctx = None
+        while True:
+            last_poll_start_time = round(time() * 1000)
+            challenge_data = self.session.get(
+                url=end_auth_url, params=params
+            ).json()
+            last_poll_end_time = round(time() * 1000)
+            if challenge_data["ResultValue"] != "AuthenticationPending":
+                flow_token = challenge_data["FlowToken"]
+                ctx = challenge_data["Ctx"]
+                break
+            params["lastPollStart"] = last_poll_start_time
+            params["lastPollEnd"] = last_poll_end_time
+            sleep(1)
+        console.print("Bestätigung erhalten.\n\n", style="bold green")
+
+        # 10. Request: https://login.microsoftonline.com/common/SAS/ProcessAuth
+        process_auth_url = (
+            "https://login.microsoftonline.com/common/SAS/ProcessAuth"
+        )
+        data = {
+            "type": 22,
+            "request": ctx,
+            "mfaLastPollStart": last_poll_start_time,
+            "mfaLastPollEnd": last_poll_end_time,
+            "mfaAuthMethod": "PhoneAppNotification",
+            "login": email,
+            "flowToken": flow_token,
+            "hpgrequestid": response.headers["x-ms-request-id"],
+            "sacxt": "",
+            "hideSmsInMfaProofs": False,
+            "canary": config_data["canary"],
+            "i19": i19 + randint(500, 1000),
+        }
+        for headers in (
+            "hpgid",
+            "hpgact",
+            "canary",
+            "client-request-id",
+            "hpgrequestid",
+            "x-ms-flowToken",
+            "x-ms-ctx",
+            "x-ms-sessionId",
+        ):
+            self.session.headers.pop(headers)
+        self.session.headers.update(
+            {
+                "Origin": "https://login.microsoftonline.com",
+                "Upgrade-Insecure-Requests": "1",
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;"
+                    "q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,"
+                    "application/signed-exchange;v=b3;q=0.7"
+                ),
+            }
+        )
+        response = self.session.post(url=process_auth_url, data=data)
+        self.session.headers.pop("Origin")
+        return response
+
+    def _start_browser_authentication(self) -> None:
+        """
+        Konfiguriert den Selenium Browser zur manuellen Anmeldung.
         Lädt Cookies aus dem Browser und schließt ihn dann wieder.
         """
 
-        # TODO: als Idee: edge://version/ bzw. chrome://version/ manuell öffnen
-        #       und Profillink in Settings Datei kopieren
-        #       dann Profil mit Selenium laden?
+        # TODO: Edge noch testen!
 
         # Event Listener um alle Cookies zu speichern (da get_cookies() sonst
         # nur Cookies von aktueller Seite abruft)
-        # TODO: macht momentan keinen Sinn, weil Session nicht persistent ist,
-        #       nur eine Stunde
         class CookieListener(AbstractEventListener):
             def __init__(self):
                 self.all_cookies = []
 
-            def after_navigate_to(self, url, driver):
+            def after_navigate_to(self, _, driver):
+                """
+                Wird nach jeder Navigation aufgerufen.
+                ABER: Die Cookies der geladenen Seite müssen explizit
+                abgespeichert werden.
+
+                Args:
+                    _ (Any): Unused arguments.
+                    driver (WebDriver): WebDriver to add listener to.
+                """
                 self.all_cookies.extend(driver.get_cookies())
 
         # WebDriver Einstellungen konfigurieren
-        options = webdriver.EdgeOptions()
+        options = BROWSER_MAPPING[BROWSER_TO_USE]["options"]()
         options.add_argument("--log-level=CRITICAL")
         options.add_argument("start-maximized")
-        options.add_argument("-inprivate")
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
-        # TODO: Hier prüfen, ob Cookies noch funktionieren
-        # Funktioniert aktuell nur so halb, nochmal mehr testen
-        # Geht evtl. mit Playwright auch einfacher
-        # Selenium kann nur Cookies von aktueller Website laden
-        # bessere Idee: erst alle Cookies aus Datei filtern, jeweilige Domains einmal laden und dann alle Cookies reinladen  # noqa: E501
-        # sonst lädt er aktuell die gleiche Seite 20 mal
-        # with webdriver.Edge(options=options) as driver:
-
-        #     # Cookies in Browser laden
-        #     all_cookies = []
-        #     with open(COOKIES_FILE, "r") as cookie_file:
-        #         cookies = json.load(cookie_file)
-        #         for cookie in cookies:
-        #             if "login.microsoftonline.com" in cookie["domain"]:
-        #                 driver.get(url=f"https://{cookie['domain'].strip('.')}")
-        #                 driver.add_cookie({
-        #                     "name": cookie["name"],
-        #                     "value": cookie["value"],
-        #                     "domain": cookie["domain"],
-        #                     "path": cookie["path"],
-        #                     "secure": cookie["secure"]
-        #                 })
-
-        #     # Wait initialisieren
-        #     wait = WebDriverWait(driver, timeout=300)
-
-        #     # Homepage laden
-        #     driver.get(url=DATASPHERE_URL)
-        #     loaded = wait.until(EC.text_to_be_present_in_element((By.ID, "__title0"), "SAP Datasphere"))  # noqa: E501
-
-        #     # Aktualisierte Cookies überschreiben, neue Cookies hinzufügen
-        #     if loaded:
-        #         for cookie in driver.get_cookies():
-        #             for num, stored_cookie in enumerate(all_cookies):
-        #                 if cookie["name"] == stored_cookie["name"] and cookie["domain"] == stored_cookie["domain"]:  # noqa: E501
-        #                     all_cookies[num] = cookie
-        #                     break
-        #             else:
-        #                 all_cookies.append(cookie)
-        #         return
+        # Pfad für Browser Profile erstellen/setzen
+        browser_data_path = PROJECT_PATH + "/." + BROWSER_TO_USE.lower()
+        if not os.path.exists(browser_data_path):
+            os.mkdir(browser_data_path)
+        options.add_argument(f"user-data-dir={browser_data_path}")
 
         # WebDriver und WebDriverWait initialisieren
-        with webdriver.Edge(options=options) as driver:
+        with BROWSER_MAPPING[BROWSER_TO_USE]["driver"](
+            options=options
+        ) as driver:
             # CookieListener und EventFiringWebDriver initialisieren
             listener = CookieListener()
             ef_driver = EventFiringWebDriver(driver, listener)
@@ -648,13 +697,18 @@ class DatasphereAutomation:
                     (By.ID, "__title0"), "SAP Datasphere"
                 )
             )
+            listener.all_cookies.extend(
+                ef_driver.get_cookies()
+            )  # WICHTIG: um Datasphere Cookies hinzuzufügen
+            sleep(5)
+
+            # WICHTIG: um persistente Microsoft Auth-Cookies zu erhalten
+            logger.debug("Lade Microsoft Login...")
+            ef_driver.get(url="https://login.microsoftonline.com")
+            sleep(5)  # für zusätzliche Sicherheit
 
             # Cookies speichern
             logger.info("Speichere Cookies...")
-            sleep(3)  # für zusätzliche Sicherheit
-            listener.all_cookies.extend(
-                ef_driver.get_cookies()
-            )  # um Datasphere Cookies hinzuzufügen
             with open(COOKIES_FILE, "w") as cookie_file:
                 json.dump(
                     listener.all_cookies,
@@ -666,30 +720,29 @@ class DatasphereAutomation:
             # EventFiringWebDriver beenden
             ef_driver.quit()
 
-    # TODO: Implementieren(?)
-    # Damit werden alle Cookies gespeichert, auch die von Redirects.
-    # Muss aber 'plawright install' manuell ausführen, um benötigte Browser
-    # zu installieren.
-    # Nochmal testen, ob es auch ohne funktioniert
-    # Oder Pfad bei Kompilierung mit angeben, dann wird installierter Browser
-    # mit geshippt wird.
-    # TODO: und auch nochmal testen, wirkte so als ob Login doch noch nicht
-    # länger als eine Stunde hält
-    # ==> müsste eher initialize_requests_session() so anpassen, dass bei
-    # Browser Login auch erstmal Cookies geladen werden.
+    # TODO: In Guide: 'playwright install' muss manuell ausgeführt werden
     def _start_browser_login_playwright(self) -> None:
         """
-        Konfiguriert den Playwright-Browser und öffnet Edge (oder Chromium) zur
-        manuellen Anmeldung.
-        Lädt Cookies aus dem Browser (alle Domains) und speichert sie dann.
+        Konfiguriert den Playwright-Browser zur manuellen Anmeldung.
+        Lädt Cookies aus dem Browser und schließt ihn dann wieder.
+
+        Speichert automatisch alle Cookies der Session.
         """
-        from playwright.sync_api import sync_playwright
+
+        # Pfad für Browser Profile erstellen/setzen
+        browser_data_path = PROJECT_PATH + "/." + BROWSER_TO_USE.lower()
+        if not os.path.exists(browser_data_path):
+            os.mkdir(browser_data_path)
 
         # Playwright-Browser starten
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
-            context = browser.new_context()
-            page = context.new_page()
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch_persistent_context(
+                user_data_dir=browser_data_path,
+                headless=False,
+                args=["--start-maximized"],
+                no_viewport=True,
+            )
+            page = browser.new_page()
 
             # Seite öffnen und auf Login warten
             logger.debug(
@@ -705,11 +758,12 @@ class DatasphereAutomation:
             sleep(3)
 
             # Alle Cookies aus allen Domains sammeln
-            all_cookies = context.cookies()
+            all_cookies = browser.cookies()
             logger.info("Speichere Cookies...")
             with open(COOKIES_FILE, "w", encoding="utf-8") as cookie_file:
                 json.dump(
                     all_cookies, cookie_file, indent=4, ensure_ascii=True
                 )
 
+            # Browser beenden
             browser.close()
