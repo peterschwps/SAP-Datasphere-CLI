@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 from rich import get_console
 from rich.prompt import Prompt
 from selenium import webdriver
@@ -39,6 +40,7 @@ BROWSER_MAPPING = {
         "driver": webdriver.Edge,
         "options": webdriver.EdgeOptions,
     },
+    "PLAYWRIGHT": None,
 }
 
 # Wichtige URLs aus Settings
@@ -91,6 +93,7 @@ class DatasphereAutomation:
         # Cookies laden, falls Datei existiert
         if os.path.isfile(COOKIES_FILE):
             logger.info("Lade Cookies aus vorheriger Session...")
+            # TODO: vielleicht nicht alle Cookies laden, sondern nur ESTAUTH 
             with open(COOKIES_FILE) as cookie_file:
                 cookies = json.load(cookie_file)
                 for cookie in cookies:
@@ -107,6 +110,15 @@ class DatasphereAutomation:
                 url=f"{DATASPHERE_URL}/sap/fpa/services/rest/epm/session",
                 params={"action": "logon"},
             )
+
+            print(response.status_code)  # TODO: wieder raus
+
+            # TODO: hier ändern
+            # wenn Cookies da, nur Refresh per Requests
+            # wenn keine Cookies da, Login starten (per Browser/Requests)
+            # dafür evtl. initialize_requests_session noch auf zwei Funktionen aufteilen
+            # dann wäre Flow (wenn Cookies da) immer 1.: Refresh Check
+            # 2.: ggfs. Login starten
 
             # Falls Cookies abgelaufen, Login starten
             if response.headers.get("X-Csrf-Token") is None:
@@ -132,8 +144,12 @@ class DatasphereAutomation:
             self._start_sso_login()
 
         elif AUTHENTICATION_METHOD.upper() == "BROWSER":
-            logger.debug("Starte Login per Browser...")
-            self._start_browser_login()
+            if BROWSER_TO_USE.upper() == "PLAYWRIGHT":
+                logger.debug("Starte Login per Playwright...")
+                self._start_browser_login_playwright()
+            else:
+                logger.debug("Starte Login per Browser...")
+                self._start_browser_login()
             with open(COOKIES_FILE) as cookie_file:
                 cookies = json.load(cookie_file)
                 for cookie in cookies:
@@ -291,7 +307,7 @@ class DatasphereAutomation:
                 "Bitte E-Mail-Adresse zur Anmeldung via Microsoft SSO "
                 "eingeben."
             )
-            email = prompt.ask("\nE-Mail-Adresse")
+            email = prompt.ask("\nE-Mail-Adresse").strip()
             console.print("\nBitte Passwort des Microsoft Kontos eingeben.")
             console.print(
                 "Achtung: Die Eingabe ist maskiert und wird deshalb nicht "
@@ -573,10 +589,11 @@ class DatasphereAutomation:
 
     def _start_browser_login(self) -> None:
         """
-        Konfiguriert den Selenium Browser und öffnet Edge zur manuellen
-        Anmeldung.
+        Konfiguriert den Selenium Browser zur manuellen Anmeldung.
         Lädt Cookies aus dem Browser und schließt ihn dann wieder.
         """
+
+        # TODO: Edge noch testen!
 
         # Event Listener um alle Cookies zu speichern (da get_cookies() sonst
         # nur Cookies von aktueller Seite abruft)
@@ -656,30 +673,33 @@ class DatasphereAutomation:
             # EventFiringWebDriver beenden
             ef_driver.quit()
 
-    # TODO: Implementieren(?)
-    # Damit werden alle Cookies gespeichert, auch die von Redirects.
-    # Muss aber 'plawright install' manuell ausführen, um benötigte Browser
-    # zu installieren.
-    # Nochmal testen, ob es auch ohne funktioniert
-    # Oder Pfad bei Kompilierung mit angeben, dann wird installierter Browser
-    # mit geshippt wird.
-    # TODO: und auch nochmal testen, wirkte so als ob Login doch noch nicht
-    # länger als eine Stunde hält
-    # ==> müsste eher initialize_requests_session() so anpassen, dass bei
-    # Browser Login auch erstmal Cookies geladen werden.
+        # TODO: scheint so als ob Cookies wirklich nach einer Stunde erstmal nicht mehr funktionieren  # noqa: E501
+        # nochmal checken ob persistent Auth Cookies die richtigen sind und ausreichend  # noqa: E501
+        # ist aber nur weil Session abgelaufen ist, kann mit Requests easy erneuert werden
+
+    # TODO: In Guide: 'playwright install' muss manuell ausgeführt werden
     def _start_browser_login_playwright(self) -> None:
         """
-        Konfiguriert den Playwright-Browser und öffnet Edge (oder Chromium) zur
-        manuellen Anmeldung.
-        Lädt Cookies aus dem Browser (alle Domains) und speichert sie dann.
+        Konfiguriert den Playwright-Browser zur manuellen Anmeldung.
+        Lädt Cookies aus dem Browser und schließt ihn dann wieder.
+
+        Speichert automatisch alle Cookies der Session.
         """
-        from playwright.sync_api import sync_playwright
+
+        # Pfad für Browser Profile erstellen/setzen
+        browser_data_path = PROJECT_PATH + "/." + BROWSER_TO_USE.lower()
+        if not os.path.exists(browser_data_path):
+            os.mkdir(browser_data_path)
 
         # Playwright-Browser starten
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
-            context = browser.new_context()
-            page = context.new_page()
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch_persistent_context(
+                user_data_dir=browser_data_path,
+                headless=False,
+                args=["--start-maximized"],
+                no_viewport=True,
+            )
+            page = browser.new_page()
 
             # Seite öffnen und auf Login warten
             logger.debug(
@@ -695,11 +715,12 @@ class DatasphereAutomation:
             sleep(3)
 
             # Alle Cookies aus allen Domains sammeln
-            all_cookies = context.cookies()
+            all_cookies = browser.cookies()
             logger.info("Speichere Cookies...")
             with open(COOKIES_FILE, "w", encoding="utf-8") as cookie_file:
                 json.dump(
                     all_cookies, cookie_file, indent=4, ensure_ascii=True
                 )
 
+            # Browser beenden
             browser.close()
