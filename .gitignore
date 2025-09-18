@@ -4,6 +4,7 @@ __pycache__/
 .chrome/
 .edge/
 .logs/
+.playwright/
 .ruff_cache/
 
 # Files
