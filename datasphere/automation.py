@@ -28,7 +28,9 @@ from utils.logging import logger
 # Wichtige Bedingungen aus Settings
 URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
 AUTHENTICATION_METHOD: str = settings["Setup"]["AUTHENTICATION_METHOD"]
-BROWSER_TO_USE: str = settings["Setup"]["BROWSER_TO_USE"]  # TODO: Check ob gültiger Wert noch implementieren  # noqa: E501
+BROWSER_TO_USE: str = settings["Setup"][
+    "BROWSER_TO_USE"
+]  # TODO: Check ob gültiger Wert noch implementieren  # noqa: E501
 
 # Mapping of BROWSER_TO_USE to webdriver classes
 BROWSER_MAPPING = {
@@ -71,7 +73,7 @@ class DatasphereAutomation:
         initialisiert eine erneute Anmeldung.
         """
 
-        # TODO: noch allgemeines Error Handling, dass Cookies löscht und 
+        # TODO: noch allgemeines Error Handling, dass Cookies löscht und
         # User benachrichtigt, dass er neustarten soll
 
         self.session = requests.Session()
@@ -94,7 +96,7 @@ class DatasphereAutomation:
         # Cookies laden, falls Datei existiert
         if os.path.isfile(COOKIES_FILE):
             logger.info("Lade Cookies aus vorheriger Session...")
-            # TODO: vielleicht nicht alle Cookies laden, sondern nur ESTAUTH 
+            # TODO: vielleicht nicht alle Cookies laden, sondern nur ESTAUTH
             with open(COOKIES_FILE) as cookie_file:
                 cookies = json.load(cookie_file)
                 for cookie in cookies:
@@ -114,9 +116,8 @@ class DatasphereAutomation:
 
             # Falls Cookies abgelaufen sind
             if response.headers.get("X-Csrf-Token") is None:
-                logger.debug(\
-                    "Datasphere Session ist abgelaufen. "
-                    "Starte neue Session..."
+                logger.debug(
+                    "Datasphere Session ist abgelaufen. Starte neue Session..."
                 )
 
             # Sonst Headers setzen und Initialisierung beenden
@@ -171,7 +172,9 @@ class DatasphereAutomation:
             }
         )
 
-    def _start_login(self, response: requests.Response) -> tuple[bool, requests.Response]:
+    def _start_login(
+        self, response: requests.Response
+    ) -> tuple[bool, requests.Response]:
         """
         Startet den Login per Requests oder Browser.
         Nutzt dafür den Wert aus der Settings-Datei.
@@ -180,19 +183,19 @@ class DatasphereAutomation:
         Requests Session.
 
         Returns:
-            tuple[bool, requests.Response]: Bei Requests True als Indikator, 
-                                            dass der Flow weiter fortgeführt 
-                                            werden muss (damit persistente 
+            tuple[bool, requests.Response]: Bei Requests True als Indikator,
+                                            dass der Flow weiter fortgeführt
+                                            werden muss (damit persistente
                                             Auth-Cookies gespeichert werden.)
                                             Bei Browser False, um den weiteren
-                                            Refresh-Session-Flow direkt zu 
+                                            Refresh-Session-Flow direkt zu
                                             beenden.
-                                            Bei Requests wird die letzte 
+                                            Bei Requests wird die letzte
                                             Response zurückgegeben. Bei Browser
-                                            wird derselbe Parameter 
-                                            zurückgegeben, der als Input 
+                                            wird derselbe Parameter
+                                            zurückgegeben, der als Input
                                             übergeben wurde.
-        """ # TODO: nochmal gucken, wie Docstring richtig formatieren, sieht komisch aus in Schnellübersicht  # noqa: E501
+        """  # TODO: nochmal gucken, wie Docstring richtig formatieren, sieht komisch aus in Schnellübersicht  # noqa: E501
         if AUTHENTICATION_METHOD.upper() == "REQUESTS":
             logger.debug("Starte Microsoft SSO Login per Requests...")
             response = self._start_requests_authentication(response)
@@ -229,7 +232,7 @@ class DatasphereAutomation:
         Aktualisiert die Datasphere Session mit den persistenten Auth-Cookies.
         Speichert die aktualisierten Cookies ab.
 
-        Startet automatisch den vollen Authentifizierungsflow, falls die 
+        Startet automatisch den vollen Authentifizierungsflow, falls die
         Auth-Cookies abgelaufen sind oder keine Cookies existieren.
         """
 
@@ -365,18 +368,20 @@ class DatasphereAutomation:
         ):
             self.session.headers.pop(header)
 
-    def _start_requests_authentication(self, response: requests.Response) -> requests.Response:
+    def _start_requests_authentication(
+        self, response: requests.Response
+    ) -> requests.Response:
         """
         Startet den Microsoft SSO Login per Requests.
-        Sendet einen Code an die Authenticator App von Microsoft. Fragt dafür 
+        Sendet einen Code an die Authenticator App von Microsoft. Fragt dafür
         Username und Passwort per Prompt der Rich Console ab.
 
         Args:
-            response (requests.Response): Reponse der letzten vorherigen 
+            response (requests.Response): Reponse der letzten vorherigen
                                           Anfrage (Konfiguration für MFA).
 
         Returns:
-            requests.Response: Response der letzten Anfrage (Auth-Verarbeitung 
+            requests.Response: Response der letzten Anfrage (Auth-Verarbeitung
                                nach erfolgreicher MFA).
         """
 
@@ -390,8 +395,7 @@ class DatasphereAutomation:
         # Prompt für Username und Password via Rich
         prompt = Prompt()
         console.print(
-            "Bitte E-Mail-Adresse zur Anmeldung via Microsoft SSO "
-            "eingeben."
+            "Bitte E-Mail-Adresse zur Anmeldung via Microsoft SSO eingeben."
         )
         email = prompt.ask("\nE-Mail-Adresse").strip()
         console.print("\nBitte Passwort des Microsoft Kontos eingeben.")
@@ -550,9 +554,7 @@ class DatasphereAutomation:
         console.print(f"Authenticator Code: {entropy}", style="bold green")
 
         # 8. Request: https://login.microsoftonline.com/common/SAS/EndAuth
-        end_auth_url = (
-            "https://login.microsoftonline.com/common/SAS/EndAuth"
-        )
+        end_auth_url = "https://login.microsoftonline.com/common/SAS/EndAuth"
         poll_count = 1
         params = {
             "authMethodId": "PhoneAppNotification",
@@ -649,7 +651,7 @@ class DatasphereAutomation:
             def after_navigate_to(self, _, driver):
                 """
                 Wird nach jeder Navigation aufgerufen.
-                ABER: Die Cookies der geladenen Seite müssen explizit 
+                ABER: Die Cookies der geladenen Seite müssen explizit
                 abgespeichert werden.
 
                 Args:
@@ -704,7 +706,7 @@ class DatasphereAutomation:
             logger.debug("Lade Microsoft Login...")
             ef_driver.get(url="https://login.microsoftonline.com")
             sleep(5)  # für zusätzliche Sicherheit
-            
+
             # Cookies speichern
             logger.info("Speichere Cookies...")
             with open(COOKIES_FILE, "w") as cookie_file:
