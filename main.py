@@ -31,18 +31,12 @@ logger.warning(
 logger.info("Programm wird beendet...")
 sys.exit(exit_code)
 
-# TODO: Chrome Anmeldung als Backup mit rein?
-# TODO: bei Browser Anmeldung sind nicht alle Cookies dabei,
-#       hält aktuell deshalb nur eine Stunde
-# TODO: noch letztes bisschen Logging von Selenium wegbekommen
+# TODO: noch letztes bisschen Logging von Selenium auf Windows wegbekommen
 # TODO: Funktion best Views per View Analyzer mit allen analytischen Modellen
 #       machen
 # TODO: Asyncio statt Threads?
 
 # Weitere TODO:
 # - Idee: Automatisierung von View-Transporten?
-# - env Datei mit wichtigen Variablen erstellen (automatisiert per
-#   FilerHandler) und dann GitHub pushen?
 # - Updates von Headern besser organisieren? Dass immer volle Headers gesetzt
 #   werden?
-# - kleinen Server parallel anbieten, der lokal immer läuft? Oder deploybar ist
