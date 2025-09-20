@@ -11,7 +11,7 @@ import requests
 
 from datasphere.automation import DatasphereAutomation
 from datasphere.views import Views
-from utils.filehandler import Datasphere, settings
+from utils.filehandler import ALL_FILES, settings
 from utils.logging import logger
 from utils.types import AnalyticalModelsDetailsDict
 
@@ -273,17 +273,13 @@ class AnalyticalModels(DatasphereAutomation):
 
         # Ergebnis speichern
         with open(
-            Datasphere.ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS"][
-                "absolute_path"
-            ],
+            ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS"]["absolute_path"],
             "w",
         ) as file:
             json.dump(analytical_models_with_views, file, indent=4)
         logger.info(
             "Ergebnisse gespeichert in '%s'.",
-            Datasphere.ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS"][
-                "absolute_path"
-            ],
+            ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS"]["absolute_path"],
         )
 
     def get_all_views_for_analytical_models_in_space(
@@ -376,9 +372,9 @@ class AnalyticalModels(DatasphereAutomation):
                         break
 
         # Ergebnis speichern
-        file_name = Datasphere.ALL_FILES[
-            "ANALYTICAL_MODELS_ALL_VIEWS_IN_SPACE"
-        ]["absolute_path"].replace("space", space_name)
+        file_name = ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS_IN_SPACE"][
+            "absolute_path"
+        ].replace("space", space_name)
         with open(file_name, "w") as file:
             json.dump(analytical_models_with_views_in_space, file, indent=4)
         logger.info("Ergebnisse gespeichert in '%s'.", file_name)
@@ -404,13 +400,13 @@ class AnalyticalModels(DatasphereAutomation):
 
         # Task-Datei lesen
         models_to_check = []
-        file_name = Datasphere.ALL_FILES[
-            "ANALYTICAL_MODELS_ALL_VIEWS_PERSISTENCE_TIME"
-        ]["absolute_path"]
+        file_name = ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS_PERSISTENCE_TIME"][
+            "absolute_path"
+        ]
         with open(file_name, newline="") as file:
             reader = csv.DictReader(
                 file,
-                fieldnames=Datasphere.ALL_FILES[
+                fieldnames=ALL_FILES[
                     "ANALYTICAL_MODELS_ALL_VIEWS_PERSISTENCE_TIME"
                 ]["columns"],
             )
@@ -539,7 +535,7 @@ class AnalyticalModels(DatasphereAutomation):
                 lock.release()
 
         # Funktion um Analytische Modelle zu speichern
-        file_path_results = Datasphere.ALL_FILES[
+        file_path_results = ALL_FILES[
             "ANALYTICAL_MODELS_ALL_VIEWS_PERSISTENCE_TIME_RESULT"
         ]["absolute_path"]
 

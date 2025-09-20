@@ -22,15 +22,13 @@ from selenium.webdriver.support.event_firing_webdriver import (
 )
 from selenium.webdriver.support.wait import WebDriverWait
 
-from utils.filehandler import COOKIES_FILE, PROJECT_PATH, settings
+from utils.filehandler import COOKIES_FILE, DATA_DIR, settings
 from utils.logging import logger
 
 # Wichtige Bedingungen aus Settings
 URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
 AUTHENTICATION_METHOD: str = settings["Setup"]["AUTHENTICATION_METHOD"]
-BROWSER_TO_USE: str = settings["Setup"][
-    "BROWSER_TO_USE"
-]  # TODO: Check, ob gültiger Wert noch implementieren  # noqa: E501
+BROWSER_TO_USE: str = settings["Setup"]["BROWSER_TO_USE"]
 
 # Mapping of BROWSER_TO_USE to webdriver classes
 BROWSER_MAPPING = {
@@ -667,7 +665,7 @@ class DatasphereAutomation:
         options.add_experimental_option("excludeSwitches", ["enable-logging"])
 
         # Pfad für Browser Profile erstellen/setzen
-        browser_data_path = PROJECT_PATH + "/." + BROWSER_TO_USE.lower()
+        browser_data_path = DATA_DIR / f".{BROWSER_TO_USE.lower()}"
         if not os.path.exists(browser_data_path):
             os.mkdir(browser_data_path)
         options.add_argument(f"user-data-dir={browser_data_path}")
@@ -730,7 +728,7 @@ class DatasphereAutomation:
         """
 
         # Pfad für Browser Profile erstellen/setzen
-        browser_data_path = PROJECT_PATH + "/." + BROWSER_TO_USE.lower()
+        browser_data_path = DATA_DIR / f".{BROWSER_TO_USE.lower()}"
         if not os.path.exists(browser_data_path):
             os.mkdir(browser_data_path)
 

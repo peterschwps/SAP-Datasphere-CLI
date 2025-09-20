@@ -11,7 +11,7 @@ import pandas as pd
 import requests
 
 from datasphere.automation import DatasphereAutomation
-from utils.filehandler import Datasphere, settings
+from utils.filehandler import ALL_FILES, settings
 from utils.logging import logger
 from utils.types import ViewDetailsDict
 
@@ -190,18 +190,14 @@ class Views(DatasphereAutomation):
                         attribute,
                     )
                     with open(
-                        Datasphere.ALL_FILES["VIEW_ATTRIBUTE"][
-                            "absolute_path"
-                        ],
+                        ALL_FILES["VIEW_ATTRIBUTE"]["absolute_path"],
                         "a",
                         newline="",
                         encoding="utf-8",
                     ) as file:
                         writer = csv.DictWriter(
                             file,
-                            fieldnames=Datasphere.ALL_FILES["VIEW_ATTRIBUTE"][
-                                "columns"
-                            ],
+                            fieldnames=ALL_FILES["VIEW_ATTRIBUTE"]["columns"],
                         )
                         values = {
                             "entity": view["name"],
@@ -388,20 +384,18 @@ class Views(DatasphereAutomation):
             if lock:
                 lock.acquire()
             with open(
-                Datasphere.ALL_FILES["VIEW_ANALYSE"]["absolute_path"],
+                ALL_FILES["VIEW_ANALYSE"]["absolute_path"],
                 "a",
                 newline="",
             ) as file:
                 writer = csv.DictWriter(
                     file,
-                    fieldnames=Datasphere.ALL_FILES["VIEW_ANALYSE"]["columns"],
+                    fieldnames=ALL_FILES["VIEW_ANALYSE"]["columns"],
                 )
                 writer.writerow(
                     {
                         key: best_view[0][key]
-                        for key in Datasphere.ALL_FILES["VIEW_ANALYSE"][
-                            "columns"
-                        ]
+                        for key in ALL_FILES["VIEW_ANALYSE"]["columns"]
                     }
                 )
             if lock:
@@ -440,15 +434,13 @@ class Views(DatasphereAutomation):
         # Task-Datei lesen
         views_to_partition = []
         with open(
-            Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE"]["absolute_path"],
+            ALL_FILES["VIEW_PARTITIONING_CREATE"]["absolute_path"],
             newline="",
             encoding="utf-8",
         ) as file:
             reader = csv.DictReader(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE"][
-                    "columns"
-                ],
+                fieldnames=ALL_FILES["VIEW_PARTITIONING_CREATE"]["columns"],
             )
             views_to_partition = list(reader)[1:]
 
@@ -486,7 +478,7 @@ class Views(DatasphereAutomation):
                     view["space"],
                 )
                 with open(
-                    Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
+                    ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
                         "absolute_path"
                     ],
                     "a",
@@ -495,7 +487,7 @@ class Views(DatasphereAutomation):
                 ) as file:
                     writer = csv.DictWriter(
                         file,
-                        fieldnames=Datasphere.ALL_FILES[
+                        fieldnames=ALL_FILES[
                             "VIEW_PARTITIONING_CREATE_RESULT"
                         ]["columns"],
                     )
@@ -517,7 +509,7 @@ class Views(DatasphereAutomation):
                     view["space"],
                 )
                 with open(
-                    Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
+                    ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
                         "absolute_path"
                     ],
                     "a",
@@ -526,7 +518,7 @@ class Views(DatasphereAutomation):
                 ) as file:
                     writer = csv.DictWriter(
                         file,
-                        fieldnames=Datasphere.ALL_FILES[
+                        fieldnames=ALL_FILES[
                             "VIEW_PARTITIONING_CREATE_RESULT"
                         ]["columns"],
                     )
@@ -590,17 +582,15 @@ class Views(DatasphereAutomation):
                 )
                 logger.debug("Response: %s\n", response.text)
             with open(
-                Datasphere.ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
-                    "absolute_path"
-                ],
+                ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"]["absolute_path"],
                 "a",
                 newline="",
             ) as file:
                 writer = csv.DictWriter(
                     file,
-                    fieldnames=Datasphere.ALL_FILES[
-                        "VIEW_PARTITIONING_CREATE_RESULT"
-                    ]["columns"],
+                    fieldnames=ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
+                        "columns"
+                    ],
                 )
                 values = {
                     "entity": view["entity"],
@@ -621,15 +611,13 @@ class Views(DatasphereAutomation):
         # Task-Datei lesen
         views_to_delete_partition = []
         with open(
-            Datasphere.ALL_FILES["VIEW_PARTITIONING_DELETE"]["absolute_path"],
+            ALL_FILES["VIEW_PARTITIONING_DELETE"]["absolute_path"],
             newline="",
             encoding="utf-8",
         ) as file:
             reader = csv.DictReader(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_PARTITIONING_DELETE"][
-                    "columns"
-                ],
+                fieldnames=ALL_FILES["VIEW_PARTITIONING_DELETE"]["columns"],
             )
             views_to_delete_partition = list(reader)[1:]
 
@@ -671,17 +659,15 @@ class Views(DatasphereAutomation):
                 view["space"],
             )
             with open(
-                Datasphere.ALL_FILES["VIEW_PARTITIONING_DELETE_RESULT"][
-                    "absolute_path"
-                ],
+                ALL_FILES["VIEW_PARTITIONING_DELETE_RESULT"]["absolute_path"],
                 "a",
                 newline="",
             ) as file:
                 writer = csv.DictWriter(
                     file,
-                    fieldnames=Datasphere.ALL_FILES[
-                        "VIEW_PARTITIONING_DELETE_RESULT"
-                    ]["columns"],
+                    fieldnames=ALL_FILES["VIEW_PARTITIONING_DELETE_RESULT"][
+                        "columns"
+                    ],
                 )
                 values = {
                     "entity": view["entity"],
@@ -715,26 +701,24 @@ class Views(DatasphereAutomation):
         # Task-Datei lesen
         views_to_persist = []
         with open(
-            Datasphere.ALL_FILES["VIEW_PERSIST"]["absolute_path"], newline=""
+            ALL_FILES["VIEW_PERSIST"]["absolute_path"], newline=""
         ) as file:
             reader = csv.DictReader(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST"]["columns"],
+                fieldnames=ALL_FILES["VIEW_PERSIST"]["columns"],
             )
             views_to_persist = list(reader)[1:]
 
         # Ergebnis-Datei mit Werten vorbefüllen
         with open(
-            Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
+            ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
             "a",
             newline="",
             encoding="utf-8",
         ) as file:
             writer = csv.DictWriter(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"][
-                    "columns"
-                ],
+                fieldnames=ALL_FILES["VIEW_PERSIST_RESULT"]["columns"],
             )
             for view in views_to_persist:
                 values = {
@@ -761,15 +745,13 @@ class Views(DatasphereAutomation):
         ) -> None:
             if lock:
                 lock.acquire()
-            df = pd.read_csv(
-                Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"]
-            )
+            df = pd.read_csv(ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"])
             df.loc[
                 (df["entity"] == view_name) & (df["space"] == view_space),
                 "isPersisted",
             ] = True
             df.to_csv(
-                Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
+                ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
                 index=False,
             )
             if lock:
@@ -787,7 +769,7 @@ class Views(DatasphereAutomation):
             if lock:
                 lock.acquire()
             df = pd.read_csv(
-                Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
+                ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
                 dtype={"runtime": "Int64"},
             )
             df.loc[
@@ -795,7 +777,7 @@ class Views(DatasphereAutomation):
                 "runtime",
             ] = runtime
             df.to_csv(
-                Datasphere.ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
+                ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
                 index=False,
             )
             if lock:
@@ -956,26 +938,24 @@ class Views(DatasphereAutomation):
         # Task-Datei lesen
         views_to_unpersist = []
         with open(
-            Datasphere.ALL_FILES["VIEW_UNPERSIST"]["absolute_path"], newline=""
+            ALL_FILES["VIEW_UNPERSIST"]["absolute_path"], newline=""
         ) as file:
             reader = csv.DictReader(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_UNPERSIST"]["columns"],
+                fieldnames=ALL_FILES["VIEW_UNPERSIST"]["columns"],
             )
             views_to_unpersist = list(reader)[1:]
 
         # Ergebnis-Datei mit Werten vorbefüllen
         with open(
-            Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"],
+            ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"],
             "a",
             newline="",
             encoding="utf-8",
         ) as file:
             writer = csv.DictWriter(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"][
-                    "columns"
-                ],
+                fieldnames=ALL_FILES["VIEW_UNPERSIST_RESULT"]["columns"],
             )
             for view in views_to_unpersist:
                 values = {
@@ -1003,14 +983,14 @@ class Views(DatasphereAutomation):
             if lock:
                 lock.acquire()
             df = pd.read_csv(
-                Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"]
+                ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"]
             )
             df.loc[
                 (df["entity"] == view_name) & (df["space"] == view_space),
                 "isRemoved",
             ] = True
             df.to_csv(
-                Datasphere.ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"],
+                ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"],
                 index=False,
             )
             if lock:
@@ -1176,14 +1156,12 @@ class Views(DatasphereAutomation):
         # Task-Datei lesen
         views_to_lock = []
         with open(
-            Datasphere.ALL_FILES["VIEW_PARTITION_LOCK"]["absolute_path"],
+            ALL_FILES["VIEW_PARTITION_LOCK"]["absolute_path"],
             newline="",
         ) as file:
             reader = csv.DictReader(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_PARTITION_LOCK"][
-                    "columns"
-                ],
+                fieldnames=ALL_FILES["VIEW_PARTITION_LOCK"]["columns"],
             )
             views_to_lock = list(reader)[1:]
 
@@ -1264,17 +1242,15 @@ class Views(DatasphereAutomation):
                 )
                 logger.debug("Response: %s\n", response.text)
             with open(
-                Datasphere.ALL_FILES["VIEW_PARTITION_LOCK_RESULT"][
-                    "absolute_path"
-                ],
+                ALL_FILES["VIEW_PARTITION_LOCK_RESULT"]["absolute_path"],
                 "a",
                 newline="",
             ) as file:
                 writer = csv.DictWriter(
                     file,
-                    fieldnames=Datasphere.ALL_FILES[
-                        "VIEW_PARTITION_LOCK_RESULT"
-                    ]["columns"],
+                    fieldnames=ALL_FILES["VIEW_PARTITION_LOCK_RESULT"][
+                        "columns"
+                    ],
                 )
                 values = {
                     "entity": view["entity"],
@@ -1294,14 +1270,12 @@ class Views(DatasphereAutomation):
         # Task-Datei lesen
         views_to_unlock = []
         with open(
-            Datasphere.ALL_FILES["VIEW_PARTITION_UNLOCK"]["absolute_path"],
+            ALL_FILES["VIEW_PARTITION_UNLOCK"]["absolute_path"],
             newline="",
         ) as file:
             reader = csv.DictReader(
                 file,
-                fieldnames=Datasphere.ALL_FILES["VIEW_PARTITION_UNLOCK"][
-                    "columns"
-                ],
+                fieldnames=ALL_FILES["VIEW_PARTITION_UNLOCK"]["columns"],
             )
             views_to_unlock = list(reader)[1:]
 
@@ -1377,17 +1351,15 @@ class Views(DatasphereAutomation):
                 )
                 logger.debug("Response: %s\n", response.text)
             with open(
-                Datasphere.ALL_FILES["VIEW_PARTITION_UNLOCK_RESULT"][
-                    "absolute_path"
-                ],
+                ALL_FILES["VIEW_PARTITION_UNLOCK_RESULT"]["absolute_path"],
                 "a",
                 newline="",
             ) as file:
                 writer = csv.DictWriter(
                     file,
-                    fieldnames=Datasphere.ALL_FILES[
-                        "VIEW_PARTITION_UNLOCK_RESULT"
-                    ]["columns"],
+                    fieldnames=ALL_FILES["VIEW_PARTITION_UNLOCK_RESULT"][
+                        "columns"
+                    ],
                 )
                 values = {
                     "entity": view["entity"],
