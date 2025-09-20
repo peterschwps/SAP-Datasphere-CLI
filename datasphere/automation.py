@@ -30,7 +30,7 @@ URL_TO_USE: str = settings["Setup"]["URL_TO_USE"]
 AUTHENTICATION_METHOD: str = settings["Setup"]["AUTHENTICATION_METHOD"]
 BROWSER_TO_USE: str = settings["Setup"][
     "BROWSER_TO_USE"
-]  # TODO: Check ob gültiger Wert noch implementieren  # noqa: E501
+]  # TODO: Check, ob gültiger Wert noch implementieren  # noqa: E501
 
 # Mapping of BROWSER_TO_USE to webdriver classes
 BROWSER_MAPPING = {
