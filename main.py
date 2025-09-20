@@ -1,12 +1,12 @@
 import sys
 
-from utils.filehandler import FileHandler
+from utils.filehandler import file_setup
 from utils.logging import logger
 from utils.menu import Menu
 
 # Alle Dateien erstellen
 # Muss IMMER zuerst ausgeführt werden
-FileHandler()
+file_setup()
 
 # Menü starten
 menu = Menu()
