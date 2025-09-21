@@ -1,3 +1,4 @@
+import asyncio
 import sys
 
 from utils.filehandler import file_setup
@@ -15,10 +16,18 @@ chosen_module, chosen_method, all_params = menu.show_menu()
 # Tasks starten
 exit_code = 1
 try:
-    app = chosen_module()  # neue Instanz der gewünschten Klasse erzeugen
-    result = chosen_method(
-        app, **all_params
-    )  # ungebundene Methode, die als erstes Argument die Instanz erhält
+    # Neue Instanz der ausgewählten Klasse erzeugen
+    app = chosen_module()
+
+    async def run_task():
+        # Initialisierungsmethode der Klasse ausführen
+        # (erstellt Datasphere Session)
+        await app.initialize()
+
+        # Ungebundene Methode zurückgeben (erhält Instanz als erstes Argument)
+        return await chosen_method(app, **all_params)
+
+    result = asyncio.run(run_task())
     exit_code = 0
 
 except KeyboardInterrupt:

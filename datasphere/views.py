@@ -7,6 +7,7 @@ from time import sleep
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
+import httpx
 import pandas as pd
 import requests
 
@@ -23,11 +24,21 @@ DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
 
 
 class Views(DatasphereAutomation):
-    def __init__(self, session: requests.Session | None = None):
-        # DatasphereAutomation initialisieren
-        super().__init__(session)
+    def __init__(self, session: httpx.AsyncClient | None = None):
+        if session is not None:
+            self.session = session
+        else:
+            super().__init__()
+    
+    async def initialize(self) -> None:
+        """
+        Initialisiert die Datasphere Session.
+        """
+        self.session: httpx.AsyncClient = await (
+            self.initialize_datasphere_session()
+        )
 
-    def _get_all_views(self) -> list[ViewDetailsDict]:
+    async def _get_all_views(self) -> list[ViewDetailsDict]:
         """
         Gibt alle Views als Liste von Dictionaries zurück.
 
@@ -36,7 +47,6 @@ class Views(DatasphereAutomation):
                                    View-Namen ("name") und detaillierten
                                    Informationen.
         """
-
         # Headers anpassen
         for header in ("X-Csrf-Token", "X-Requested-With", "Priority"):
             with contextlib.suppress(KeyError):
@@ -83,9 +93,11 @@ class Views(DatasphereAutomation):
 
         # Anfrage senden
         logger.debug("Lade alle Views...")
-        response = self.session.get(
+        response = await self.session.get(
             url=url, params=urlencode(params, safe="()*", quote_via=quote)
         )
+        print(response.json())  # TODO: Abfrage enthält scheinbar Fehler, alte Abfrage funktioniert auch nicht mehr  # noqa: E501
+        quit()
         all_views: list[ViewDetailsDict] = response.json()["value"]
 
         # Nicht benötigte Headers für weitere Requests wieder entfernen
@@ -101,7 +113,7 @@ class Views(DatasphereAutomation):
 
         return all_views
 
-    def get_all_views_where_attribute_contains(self, word: str) -> None:
+    async def get_all_views_where_attribute_contains(self, word: str) -> None:
         """
         Gibt alle Views als CSV-Datei aus, die ein Attribut haben,
         dass das Suchwort enthält.
@@ -109,9 +121,8 @@ class Views(DatasphereAutomation):
         Args:
             word (str): Suchwort (case-insensitive).
         """
-
         # Alle Views abfragen
-        all_views = self._get_all_views()
+        all_views = await self._get_all_views()
 
         # Headers anpassen
         # (Voraussetzung: vorher wird immer get_all_view_names() aufgerufen)
@@ -161,7 +172,7 @@ class Views(DatasphereAutomation):
             logger.debug(
                 "Prüfe View %s in %s...", view["name"], view["space_name"]
             )
-            response = self.session.get(
+            response = await self.session.get(
                 url=f"{DATASPHERE_URL}/deepsea/repository"
                 f"/{view['space_name']}/designObjects",
                 params=params,

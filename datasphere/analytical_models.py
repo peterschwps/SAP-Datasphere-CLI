@@ -7,6 +7,7 @@ from time import sleep
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
+import httpx
 import requests
 
 from datasphere.automation import DatasphereAutomation
@@ -23,9 +24,19 @@ DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
 
 
 class AnalyticalModels(DatasphereAutomation):
-    def __init__(self, session: requests.Session | None = None):
-        # DatasphereAutomation initialisieren
-        super().__init__(session)
+    def __init__(self, session: httpx.AsyncClient | None = None):
+        if session is not None:
+            self.session = session
+        else:
+            super().__init__()
+
+    async def initialize(self) -> None:
+        """
+        Initialisiert die Datasphere Session.
+        """
+        self.session: httpx.AsyncClient = await (
+            self.initialize_datasphere_session()
+        )
 
     def _get_all_analytical_models(self) -> list[AnalyticalModelsDetailsDict]:
         """
