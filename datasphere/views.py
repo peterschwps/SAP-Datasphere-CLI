@@ -1,15 +1,11 @@
-import concurrent.futures
+import asyncio
 import contextlib
 import csv
-import threading
-from copy import deepcopy
-from time import sleep
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 import httpx
 import pandas as pd
-import requests
 
 from datasphere.automation import DatasphereAutomation
 from utils.filehandler import ALL_FILES, settings
@@ -29,7 +25,7 @@ class Views(DatasphereAutomation):
             self.session = session
         else:
             super().__init__()
-    
+
     async def initialize(self) -> None:
         """
         Initialisiert die Datasphere Session.
@@ -94,10 +90,8 @@ class Views(DatasphereAutomation):
         # Anfrage senden
         logger.debug("Lade alle Views...")
         response = await self.session.get(
-            url=url, params=urlencode(params, safe="()*", quote_via=quote)
+            url=f"{url}?{urlencode(params, safe='()*', quote_via=quote)}"
         )
-        print(response.json())  # TODO: Abfrage enthält scheinbar Fehler, alte Abfrage funktioniert auch nicht mehr  # noqa: E501
-        quit()
         all_views: list[ViewDetailsDict] = response.json()["value"]
 
         # Nicht benötigte Headers für weitere Requests wieder entfernen
@@ -179,7 +173,7 @@ class Views(DatasphereAutomation):
             )
             try:
                 view_data = response.json()
-            except requests.exceptions.JSONDecodeError:
+            except httpx.HTTPError:
                 logger.error(
                     "Fehler beim Abfragen der View %s in %s.",
                     view["name"],
@@ -218,23 +212,19 @@ class Views(DatasphereAutomation):
                         }
                         writer.writerow(values)
 
-    def create_view_analytics(
-        self, use_threads: bool = True, thread_count: int = 1
-    ) -> None:
+    async def create_view_analytics(self, thread_count: int = 1) -> None:
         """
         Erstellt View-Analysen für alle Views. Threads können in geringer
         Anzahl genutzt werden, da es sonst zu Ratelimits kommen kann.
         Fünf Threads sind fehlerfrei durchgelaufen.
 
         Args:
-            use_threads (bool, optional): Wenn True, werden Threads genutzt.
-                                          Standard ist True.
-            thread_count (int, optional): Anzahl an Threads / gleichzeitigen
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
                                           Anfragen. Standard ist 1.
-        """
+        """  # TODO: überall use_threads raus und thread_count=1 als Standard
 
         # Alle Views abfragen
-        all_views = self._get_all_views()
+        all_views = await self._get_all_views()
 
         # Headers anpassen
         # (Voraussetzung: vorher wird immer get_all_view_names() aufgerufen)
@@ -247,27 +237,25 @@ class Views(DatasphereAutomation):
         )
 
         # Tasks starten
-        if use_threads:
-            lock = threading.Lock()
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=thread_count
-            ) as executor:
-                for view in all_views:
-                    executor.submit(
-                        self._create_view_analytics,
-                        view,
-                        deepcopy(self.session),
-                        lock,
-                    )
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for view in all_views:
+
+                async def process_view(view_data):
+                    async with semaphore:
+                        await self._create_view_analytics(view_data)
+
+                task = asyncio.create_task(process_view(view))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
         else:
             for view in all_views:
-                self._create_view_analytics(view, self.session)
+                await self._create_view_analytics(view)
 
-    def _create_view_analytics(
+    async def _create_view_analytics(
         self,
         view: ViewDetailsDict,
-        session: requests.Session,
-        lock: threading.Lock | None = None,
         filter_out_own_view: bool = False,
     ) -> None:
         """
@@ -278,11 +266,6 @@ class Views(DatasphereAutomation):
 
         Args:
             view (ViewDetailsDict): View, für die eine Analyse erstellt wird.
-            session (requests.Session): Kopie der Standard-Session
-                                        (initialiserte Session nach Aufruf von
-                                        get_all_view_names())
-            lock (threading.Lock, optional): Threading-Lock für Operationen mit
-                                             Exportdatei. Standard ist None.
             filter_out_own_view (bool, optional): Wenn True, wird die eigene
                                                   View aus der Analyse
                                                   ausgeschlossen.
@@ -305,7 +288,7 @@ class Views(DatasphereAutomation):
             "withMemoryAnalysis": False,
             "maximumMemoryConsumptionInGiB": 1,
         }
-        response = session.post(url=url, json=data)
+        response = await self.session.post(url=url, json=data)
 
         # Auf Fehler prüfen
         if not (
@@ -323,11 +306,13 @@ class Views(DatasphereAutomation):
         )
 
         # Request-ID aktualisieren
-        session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+        self.session.headers.update(
+            {"x-request-id": str(uuid4()).replace("-", "")}
+        )
 
         # Logs der letzten Läufe fetchen
-        def fetch_logs() -> list[dict]:
-            response = session.get(
+        async def fetch_logs() -> list[dict]:
+            response = await self.session.get(
                 url=f"{DATASPHERE_URL}/dwaas-core/tf/{space_name}/logs",
                 params={"objectId": view_name, "getLocks": True},
             )
@@ -336,7 +321,7 @@ class Views(DatasphereAutomation):
         # Ergebnisse abwarten
         latest_status = None
         while latest_status != "COMPLETED":
-            logs = fetch_logs()
+            logs = await fetch_logs()
             latest_status = logs[0]["status"]
             if latest_status == "FAILED":
                 logger.error(
@@ -351,18 +336,21 @@ class Views(DatasphereAutomation):
             logger.debug(
                 "Warte auf Ergebnisse für %s in %s...", view_name, space_name
             )
-            sleep(1)
+            await asyncio.sleep(1)
 
         # Log-ID des letzten Laufs auslesen
-        log_id: int = fetch_logs()[0]["logId"]
+        log_id: int = (await fetch_logs())[0]["logId"]
 
         # Request-ID aktualisieren
-        session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+        self.session.headers.update(
+            {"x-request-id": str(uuid4()).replace("-", "")}
+        )
 
         # Ergebnisse auslesen
-        response = session.get(
+        response = await self.session.get(
             url=(
-                f"{DATASPHERE_URL}/dwaas-core/advisor/{space_name}/result/{log_id}"
+                f"{DATASPHERE_URL}/dwaas-core/advisor"
+                f"/{space_name}/result/{log_id}"
             )
         )
 
@@ -392,8 +380,6 @@ class Views(DatasphereAutomation):
                 best_view[0]["entity"],
                 best_view[0]["space"],
             )
-            if lock:
-                lock.acquire()
             with open(
                 ALL_FILES["VIEW_ANALYSE"]["absolute_path"],
                 "a",
@@ -409,12 +395,10 @@ class Views(DatasphereAutomation):
                         for key in ALL_FILES["VIEW_ANALYSE"]["columns"]
                     }
                 )
-            if lock:
-                lock.release()
         else:
             logger.debug("Keine View mit Persistenz-Score 10 gefunden.")
 
-    def create_partitioning_for_views(
+    async def create_partitioning_for_views(
         self,
         partitions: list[str],
         overwrite_existing_partitions: bool = False,
@@ -467,7 +451,7 @@ class Views(DatasphereAutomation):
             self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )
-            response = self.session.get(
+            response = await self.session.get(
                 url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
                 f"/{view['space']}/persistedViews/{view['entity']}"
             )
@@ -576,7 +560,7 @@ class Views(DatasphereAutomation):
                 "runtimeDataCalculation": "designtime",
                 "type": "range",
             }
-            response = self.session.post(url=url, json=data)
+            response = await self.session.post(url=url, json=data)
 
             # In Datei vermerken
             if response.status_code == 201:
@@ -611,7 +595,7 @@ class Views(DatasphereAutomation):
                 }
                 writer.writerow(values)
 
-    def remove_partitioning_for_views(self) -> None:
+    async def remove_partitioning_for_views(self) -> None:
         """
         Entfernt Partitionen für alle Views,
         die in der Datei 'views_to_delete_partition.csv' enthalten sind.
@@ -649,7 +633,7 @@ class Views(DatasphereAutomation):
             self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )
-            response = self.session.delete(
+            response = await self.session.delete(
                 url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
                 f"/{view['space']}/persistedViews/{view['entity']}"
             )
@@ -687,9 +671,8 @@ class Views(DatasphereAutomation):
                 }
                 writer.writerow(values)
 
-    def persist_views(
+    async def persist_views(
         self,
-        use_threads: bool = True,
         thread_count: int = 1,
         timer: bool = False,
     ) -> None:
@@ -701,9 +684,7 @@ class Views(DatasphereAutomation):
         Schreibt Ergebnisse in VIEW_PERSIST_RESULT_FILE_PATH.
 
         Args:
-            use_threads (bool, optional): Wenn True, werden Threads genutzt.
-                                          Standard ist True.
-            thread_count (int, optional): Anzahl an Threads / gleichzeitigen
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
                                           Anfragen. Standard ist 1.
             timer (bool, optional): Wenn True, wird die Dauer der Persistierung
                                     erfasst. Standard ist False.
@@ -751,11 +732,7 @@ class Views(DatasphereAutomation):
         # Funktion um Result-Datei zu aktualisieren (erst gesamte Datei
         # einlesen, dann neu schreiben, um entsprechende Zeile zu
         # aktualisieren)
-        def set_is_persisted_true(
-            view_name: str, view_space: str, lock: threading.Lock | None = None
-        ) -> None:
-            if lock:
-                lock.acquire()
+        def set_is_persisted_true(view_name: str, view_space: str) -> None:
             df = pd.read_csv(ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"])
             df.loc[
                 (df["entity"] == view_name) & (df["space"] == view_space),
@@ -765,20 +742,13 @@ class Views(DatasphereAutomation):
                 ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
                 index=False,
             )
-            if lock:
-                lock.release()
 
         # Funktion um Result-Datei zu aktualisieren (erst gesamte Datei
         # einlesen, dann neu schreiben, um entsprechende Zeile zu
         # aktualisieren)
         def update_runtime(
-            view_name: str,
-            view_space: str,
-            runtime: int,
-            lock: threading.Lock | None = None,
+            view_name: str, view_space: str, runtime: int
         ) -> None:
-            if lock:
-                lock.acquire()
             df = pd.read_csv(
                 ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
                 dtype={"runtime": "Int64"},
@@ -791,43 +761,36 @@ class Views(DatasphereAutomation):
                 ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
                 index=False,
             )
-            if lock:
-                lock.release()
 
         # Tasks starten
-        if use_threads:
-            lock = threading.Lock()
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=thread_count
-            ) as executor:
-                future_to_view_mapping = {
-                    executor.submit(
-                        self._persist_view,
-                        deepcopy(self.session),
-                        view["entity"],
-                        view["space"],
-                    ): view
-                    for view in views_to_persist
-                }
-                for future in concurrent.futures.as_completed(
-                    future_to_view_mapping
-                ):
-                    view = future_to_view_mapping[future]
-                    success, log_details = future.result()
-                    runtime = round(log_details.get("runTime", 0) / 1000)
-                    if success:
-                        set_is_persisted_true(
-                            view["entity"], view["space"], lock
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for view in views_to_persist:
+
+                async def process_view(view):
+                    async with semaphore:
+                        success, log_details = await self._persist_view(
+                            view["entity"], view["space"]
                         )
-                        if timer and runtime > 0:
-                            update_runtime(
-                                view["entity"], view["space"], runtime, lock
+                        runtime = round(log_details.get("runTime", 0) / 1000)
+                        if success:
+                            set_is_persisted_true(
+                                view["entity"], view["space"]
                             )
+                            if timer and runtime > 0:
+                                update_runtime(
+                                    view["entity"], view["space"], runtime
+                                )
+
+                task = asyncio.create_task(process_view(view))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
 
         else:
             for view in views_to_persist:
-                success, log_details = self._persist_view(
-                    self.session, view["entity"], view["space"]
+                success, log_details = await self._persist_view(
+                    view["entity"], view["space"]
                 )
                 runtime = round(log_details.get("runTime", -1000) / 1000)
                 if success:
@@ -835,16 +798,14 @@ class Views(DatasphereAutomation):
                     if timer and runtime > 0:
                         update_runtime(view["entity"], view["space"], runtime)
 
-    def _persist_view(
-        self, session: requests.Session, view_name: str, view_space: str
+    async def _persist_view(
+        self, view_name: str, view_space: str
     ) -> tuple[bool, dict]:
         """
         Persistiert eine View. Prüft dabei nicht, ob die View bereits
         persistiert ist.
 
         Args:
-            session (requests.Session): Kopie der Standard-Session
-                                        (initialiserte Session).
             view_name (str): Name der View.
             view_space (str): Name des View-Spaces.
 
@@ -864,7 +825,7 @@ class Views(DatasphereAutomation):
             "objectId": view_name,
             "activity": "PERSIST",
         }
-        response = session.post(url=url, json=data)
+        response = await self.session.post(url=url, json=data)
 
         # Ergebnis prüfen und taskLogId parsen
         if response.status_code != 202:
@@ -878,11 +839,11 @@ class Views(DatasphereAutomation):
         log_id = response.json()["taskLogId"]
 
         # Funktion zum Abrufen der Log-Details
-        def fetch_log_details() -> dict:
-            session.headers.update(
+        async def fetch_log_details() -> dict:
+            self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )
-            response = session.get(
+            response = await self.session.get(
                 url=(
                     f"{DATASPHERE_URL}/dwaas-core/tf/{view_space}/extendedlogs/{log_id}"
                 )
@@ -892,7 +853,7 @@ class Views(DatasphereAutomation):
         # Ergebnisse abwarten
         log_details = {}
         while True:
-            log_details = fetch_log_details()
+            log_details = await fetch_log_details()
             latest_status = log_details["status"]
             if latest_status == "COMPLETED":
                 break
@@ -920,7 +881,7 @@ class Views(DatasphereAutomation):
                 minutes,
                 seconds,
             )
-            sleep(1)
+            await asyncio.sleep(1)
 
         # Result-Datei aktualisieren (erst gesamte Datei einlesen, dann neu
         # schreiben, um entsprechende Zeile zu aktualisieren)
@@ -929,9 +890,7 @@ class Views(DatasphereAutomation):
         )
         return True, log_details
 
-    def unpersist_views(
-        self, use_threads: bool = True, thread_count: int = 1
-    ) -> None:
+    async def unpersist_views(self, thread_count: int = 1) -> None:
         """
         Entfernt Persistenzen für Views. Threads können in geringer Anzahl
         genutzt werden, da es sonst zu Ratelimits kommen kann.
@@ -940,10 +899,8 @@ class Views(DatasphereAutomation):
         Schreibt Ergebnisse in VIEW_UNPERSIST_RESULT_FILE_PATH.
 
         Args:
-            use_threads (bool, optional): Wenn True, werden Threads genutzt.
-                                          Standard ist True.
-            thread_count (int, optional): Anzahl an Threads / gleichzeitigen
-                                          Anfragen. Standard ist 1.
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                            Anfragen. Standard ist 1.
         """
 
         # Task-Datei lesen
@@ -985,14 +942,10 @@ class Views(DatasphereAutomation):
         )
 
         # Funktion, um nur entsprechende Zeile in Result-Datei zu aktualisieren
-        def set_is_removed_true(
-            view_name: str, view_space: str, lock: threading.Lock | None = None
-        ) -> None:
+        def set_is_removed_true(view_name: str, view_space: str) -> None:
             """
             Setzt isRemoved in der Result-Datei für die aktuelle View auf True.
             """
-            if lock:
-                lock.acquire()
             df = pd.read_csv(
                 ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"]
             )
@@ -1004,51 +957,41 @@ class Views(DatasphereAutomation):
                 ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"],
                 index=False,
             )
-            if lock:
-                lock.release()
 
         # Tasks starten
-        if use_threads:
-            lock = threading.Lock()
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=thread_count
-            ) as executor:
-                future_to_view_mapping = {
-                    executor.submit(
-                        self._unpersist_view,
-                        deepcopy(self.session),
-                        view["entity"],
-                        view["space"],
-                    ): view
-                    for view in views_to_unpersist
-                }
-                for future in concurrent.futures.as_completed(
-                    future_to_view_mapping
-                ):
-                    view = future_to_view_mapping[future]
-                    success, _ = future.result()
-                    if success:
-                        set_is_removed_true(
-                            view["entity"], view["space"], lock
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for view in views_to_unpersist:
+
+                async def process_view(view):
+                    async with semaphore:
+                        success, _ = await self._unpersist_view(
+                            view["entity"], view["space"]
                         )
+                        if success:
+                            set_is_removed_true(view["entity"], view["space"])
+
+                task = asyncio.create_task(process_view(view))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
+
         else:
             for view in views_to_unpersist:
-                success, _ = self._unpersist_view(
-                    self.session, view["entity"], view["space"]
+                success, _ = await self._unpersist_view(
+                    view["entity"], view["space"]
                 )
                 if success:
                     set_is_removed_true(view["entity"], view["space"])
 
-    def _unpersist_view(
-        self, session: requests.Session, view_name: str, view_space: str
+    async def _unpersist_view(
+        self, view_name: str, view_space: str
     ) -> tuple[bool, dict]:
         """
         Entfernt die Persistenz für eine View. Prüft vorher, ob View
         persistiert ist.
 
         Args:
-            session (requests.Session): Kopie der Standard-Session
-                                        (initialiserte Session).
             view_name (str): Name der View.
             view_space (str): Name des View-Spaces.
 
@@ -1062,7 +1005,7 @@ class Views(DatasphereAutomation):
             f"{DATASPHERE_URL}/dwaas-core/monitor/{view_space}"
             f"/persistedViews/{view_name}"
         )
-        response = session.get(url=url)
+        response = await self.session.get(url=url)
         if (
             response.status_code != 200
             or "dataPersistency" not in response.json()
@@ -1087,7 +1030,9 @@ class Views(DatasphereAutomation):
         logger.debug(
             "Entferne Persistenz für %s in %s...", view_name, view_space
         )
-        session.headers.update({"x-request-id": str(uuid4()).replace("-", "")})
+        self.session.headers.update(
+            {"x-request-id": str(uuid4()).replace("-", "")}
+        )
         url = f"{DATASPHERE_URL}/dwaas-core/tf/directexecute"
         data = {
             "applicationId": "VIEWS",
@@ -1095,7 +1040,7 @@ class Views(DatasphereAutomation):
             "objectId": view_name,
             "activity": "REMOVE_PERSISTED_DATA",
         }
-        response = session.post(url=url, json=data)
+        response = await self.session.post(url=url, json=data)
 
         # Ergebnis prüfen und taskLogId parsen
         if response.status_code != 202:
@@ -1109,11 +1054,11 @@ class Views(DatasphereAutomation):
         log_id = response.json()["taskLogId"]
 
         # Funktion zum Abrufen der Log-Details
-        def fetch_log_details() -> dict:
-            session.headers.update(
+        async def fetch_log_details() -> dict:
+            self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )
-            response = session.get(
+            response = await self.session.get(
                 url=f"{DATASPHERE_URL}/dwaas-core/tf/{view_space}/extendedlogs/{log_id}"
             )
             return response.json()["logDetails"]
@@ -1121,7 +1066,7 @@ class Views(DatasphereAutomation):
         # Ergebnisse abwarten
         log_details = {}
         while True:
-            log_details = fetch_log_details()
+            log_details = await fetch_log_details()
             latest_status = log_details["status"]
             if latest_status == "COMPLETED":
                 break
@@ -1144,13 +1089,13 @@ class Views(DatasphereAutomation):
                 f"Warte auf Ergebnisse für {view_name} in {view_space}. "
                 f"Aktuelle Laufzeit: {hours:02}:{minutes:02}:{seconds:02}."
             )
-            sleep(1)
+            await asyncio.sleep(1)
 
         # Result-Datei aktualisieren
         logger.info("Persistenz für %s in %s entfernt.", view_name, view_space)
         return True, log_details
 
-    def lock_partitions_until_year(self, year: int) -> None:
+    async def lock_partitions_until_year(self, year: int) -> None:
         """
         Sperrt Partitionen für alle Views, die in der
         Datei 'views_to_lock_partitions.csv' enthalten sind. Überspringt Views,
@@ -1187,7 +1132,7 @@ class Views(DatasphereAutomation):
             self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )
-            response = self.session.get(
+            response = await self.session.get(
                 url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
                 f"/{view['space']}/persistedViews/{view['entity']}"
             )
@@ -1234,7 +1179,7 @@ class Views(DatasphereAutomation):
             for partition in data["ranges"]:
                 if int(partition["low"]["value"]) <= year:
                     partition["locked"] = True
-            response = self.session.post(url=url, json=data)
+            response = await self.session.post(url=url, json=data)
 
             # In Datei vermerken
             if response.status_code == 201:
@@ -1270,7 +1215,7 @@ class Views(DatasphereAutomation):
                 }
                 writer.writerow(values)
 
-    def unlock_all_partitions(self) -> None:
+    async def unlock_all_partitions(self) -> None:
         """
         Entsperrt alle Partitionen für alle Views,
         die in der Datei 'views_to_unlock_partitions.csv' enthalten sind.
@@ -1301,7 +1246,7 @@ class Views(DatasphereAutomation):
             self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )
-            response = self.session.get(
+            response = await self.session.get(
                 url=f"{DATASPHERE_URL}/dwaas-core/partitioning"
                 f"/{view['space']}/persistedViews/{view['entity']}"
             )
@@ -1345,7 +1290,7 @@ class Views(DatasphereAutomation):
             }
             for partition in data["ranges"]:
                 partition["locked"] = False
-            response = self.session.post(url=url, json=data)
+            response = await self.session.post(url=url, json=data)
 
             # In Datei vermerken
             if response.status_code == 201:
