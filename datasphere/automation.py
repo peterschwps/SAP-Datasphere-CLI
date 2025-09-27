@@ -110,7 +110,7 @@ class DatasphereAutomation:
                         name=cookie["name"],
                         value=cookie["value"],
                         domain=cookie["domain"],
-                        path=cookie["path"]
+                        path=cookie["path"],
                     )
 
             # Prüfen, ob Cookie Session noch aktiv (1 Stunde)
@@ -259,7 +259,8 @@ class DatasphereAutomation:
 
         # 1. Request: https://<subdomain>.eu10.hcs.cloud.sap/dwaas-core/index.html
         response = await self.session.get(
-            url=f"{DATASPHERE_URL}/dwaas-core/index.html"
+            url=f"{DATASPHERE_URL}/dwaas-core/index.html",
+            follow_redirects=True,
         )
         oauth_url_result = re.search(r'location="([^"]+)"', response.text)
         if not oauth_url_result:
@@ -282,19 +283,19 @@ class DatasphereAutomation:
             name="fragmentAfterLogin",
             value="#/home",
             domain=str(datasphere_domain),
-            path="/"
+            path="/",
         )
         self.session.cookies.set(
             name="locationAfterLogin",
             value="/dwaas-core/index.html",
             domain=str(datasphere_domain),
-            path="/"
+            path="/",
         )
         self.session.cookies.set(
             name="signature",
             value=signature_cookie_value,
             domain=str(datasphere_domain),
-            path="/"
+            path="/",
         )
 
         # 2. Request: https://<subdomain>.authentication.eu10.hana.ondemand.com/oauth/authorize
@@ -583,9 +584,7 @@ class DatasphereAutomation:
         ctx = None
         while True:
             last_poll_start_time = round(time() * 1000)
-            response = await self.session.get(
-                url=end_auth_url, params=params
-            )
+            response = await self.session.get(url=end_auth_url, params=params)
             challenge_data = response.json()
             last_poll_end_time = round(time() * 1000)
             if challenge_data["ResultValue"] != "AuthenticationPending":
