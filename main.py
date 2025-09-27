@@ -40,6 +40,7 @@ logger.warning(
 logger.info("Programm wird beendet...")
 sys.exit(exit_code)
 
+# TODO: noch alle Funktionen testen
 # TODO: Chrome Anmeldung als Backup mit rein?
 # TODO: bei Browser Anmeldung sind nicht alle Cookies dabei,
 #       hält aktuell deshalb nur eine Stunde
