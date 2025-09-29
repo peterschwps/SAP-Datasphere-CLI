@@ -56,7 +56,10 @@ AUTH_URL: str = f"https://{SUBDOMAIN}.authentication.eu10.hana.ondemand.com"
 
 class DatasphereAutomation:
     def __init__(self):
-        self.session: httpx.AsyncClient = httpx.AsyncClient()
+        self.session: httpx.AsyncClient = httpx.AsyncClient(
+            timeout=60.0,
+            follow_redirects=True,
+        )
 
     async def initialize_datasphere_session(self) -> httpx.AsyncClient:
         """
@@ -189,18 +192,18 @@ class DatasphereAutomation:
         Requests Session.
 
         Returns:
-            tuple[bool, requests.Response]: Bei Requests True als Indikator,
-                                            dass der Flow weiter fortgeführt
-                                            werden muss (damit persistente
-                                            Auth-Cookies gespeichert werden.)
-                                            Bei Browser False, um den weiteren
-                                            Refresh-Session-Flow direkt zu
-                                            beenden.
-                                            Bei Requests wird die letzte
-                                            Response zurückgegeben. Bei Browser
-                                            wird derselbe Parameter
-                                            zurückgegeben, der als Input
-                                            übergeben wurde.
+            tuple[bool, httpx.Response]: Bei Requests True als Indikator,
+                                         dass der Flow weiter fortgeführt
+                                         werden muss (damit persistente
+                                         Auth-Cookies gespeichert werden.)
+                                         Bei Browser False, um den weiteren
+                                         Refresh-Session-Flow direkt zu
+                                         beenden.
+                                         Bei Requests wird die letzte
+                                         Response zurückgegeben. Bei Browser
+                                         wird derselbe Parameter
+                                         zurückgegeben, der als Input
+                                         übergeben wurde.
         """  # TODO: nochmal gucken, wie Docstring richtig formatieren, sieht komisch aus in Schnellübersicht  # noqa: E501
         if AUTHENTICATION_METHOD.upper() == "REQUESTS":
             logger.debug("Starte Microsoft SSO Login per Requests...")
@@ -260,7 +263,6 @@ class DatasphereAutomation:
         # 1. Request: https://<subdomain>.eu10.hcs.cloud.sap/dwaas-core/index.html
         response = await self.session.get(
             url=f"{DATASPHERE_URL}/dwaas-core/index.html",
-            follow_redirects=True,
         )
         oauth_url_result = re.search(r'location="([^"]+)"', response.text)
         if not oauth_url_result:
@@ -307,7 +309,7 @@ class DatasphereAutomation:
                 "Accept-Language": "de",
             }
         )
-        response = await self.session.get(url=oauth_url, follow_redirects=True)
+        response = await self.session.get(url=oauth_url)
 
         # SAML Link parsen
         soup = BeautifulSoup(response.text, "html.parser")
@@ -317,7 +319,7 @@ class DatasphereAutomation:
         # Weiterleitung an: https://<subdomain>.authentication.eu10.hana.ondemand.com/saml/login/alias/<subdomain>.aws-live-eu10
         # erneute Weiterleitung an: https://login.microsoftonline.com/<tenant_id>/saml2
         self.session.headers.update({"Referer": f"{AUTH_URL}/login"})
-        response = await self.session.get(url=saml_url, follow_redirects=True)
+        response = await self.session.get(url=saml_url)
 
         # Prüfen, ob Bestätigung per MFA erforderlich
         # (nicht mehr im Hintergrund angemeldet)
@@ -343,11 +345,7 @@ class DatasphereAutomation:
         self.session.headers.update(
             {"Referer": "https://login.microsoftonline.com/"}
         )
-        response = await self.session.post(
-            url=SSO_URL,
-            data=data,
-            follow_redirects=True,
-        )
+        response = await self.session.post(url=SSO_URL, data=data)
 
         # Cookies in Datei speichern
         logger.info("Speichere Cookies...")
@@ -384,12 +382,12 @@ class DatasphereAutomation:
         Username und Passwort per Prompt der Rich Console ab.
 
         Args:
-            response (requests.Response): Reponse der letzten vorherigen
-                                          Anfrage (Konfiguration für MFA).
+            response (httpx.Response): Reponse der letzten vorherigen
+                                       Anfrage (Konfiguration für MFA).
 
         Returns:
-            requests.Response: Response der letzten Anfrage (Auth-Verarbeitung
-                               nach erfolgreicher MFA).
+            httpx.Response: Response der letzten Anfrage (Auth-Verarbeitung
+                            nach erfolgreicher MFA).
         """
 
         # Globale Rich Console speichern

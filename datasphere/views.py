@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import csv
+from json.decoder import JSONDecodeError
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
@@ -173,13 +174,15 @@ class Views(DatasphereAutomation):
             )
             try:
                 view_data = response.json()
-            except httpx.HTTPError:
+            except (httpx.HTTPError, JSONDecodeError):
                 logger.error(
                     "Fehler beim Abfragen der View %s in %s.",
                     view["name"],
                     view["space_name"],
                 )
-                logger.debug("View: %s\nResponse: %s\n", view, response.text)
+                logger.debug(
+                    "View: %s\nResponse: %s\n", view, response.text.strip()
+                )
                 continue
 
             # Infos in Datei schreiben,
@@ -211,6 +214,10 @@ class Views(DatasphereAutomation):
                             "attribute": attribute,
                         }
                         writer.writerow(values)
+
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_ATTRIBUTE"]["absolute_path"]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)
 
     async def create_view_analytics(self, thread_count: int = 1) -> None:
         """
@@ -252,6 +259,10 @@ class Views(DatasphereAutomation):
         else:
             for view in all_views:
                 await self._create_view_analytics(view)
+
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_ANALYSE"]["absolute_path"]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)
 
     async def _create_view_analytics(
         self,
@@ -595,6 +606,12 @@ class Views(DatasphereAutomation):
                 }
                 writer.writerow(values)
 
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
+            "absolute_path"
+        ]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)
+
     async def remove_partitioning_for_views(self) -> None:
         """
         Entfernt Partitionen für alle Views,
@@ -670,6 +687,12 @@ class Views(DatasphereAutomation):
                     "removedPartition": True,
                 }
                 writer.writerow(values)
+
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_PARTITIONING_DELETE_RESULT"][
+            "absolute_path"
+        ]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)
 
     async def persist_views(
         self,
@@ -798,6 +821,10 @@ class Views(DatasphereAutomation):
                     if timer and runtime > 0:
                         update_runtime(view["entity"], view["space"], runtime)
 
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)
+
     async def _persist_view(
         self, view_name: str, view_space: str
     ) -> tuple[bool, dict]:
@@ -816,7 +843,9 @@ class Views(DatasphereAutomation):
 
         # Persistenz starten
         logger.debug(
-            "Starte Persistierung für %s in %s...", view_name, view_space
+            "Starte Persistierung von View '%s' in '%s'...",
+            view_name,
+            view_space,
         )
         url = f"{DATASPHERE_URL}/dwaas-core/tf/directexecute"
         data = {
@@ -984,6 +1013,10 @@ class Views(DatasphereAutomation):
                 if success:
                     set_is_removed_true(view["entity"], view["space"])
 
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)
+
     async def _unpersist_view(
         self, view_name: str, view_space: str
     ) -> tuple[bool, dict]:
@@ -1011,7 +1044,7 @@ class Views(DatasphereAutomation):
             or "dataPersistency" not in response.json()
         ):
             logger.error(
-                "Fehler beim Prüfen, ob View %s in %s persistiert ist. "
+                "Fehler beim Prüfen, ob View '%s' in '%s' persistiert ist. "
                 "Statuscode: %s. Wird übersprungen...",
                 view_name,
                 view_space,
@@ -1020,7 +1053,8 @@ class Views(DatasphereAutomation):
             return False, {}
         if response.json()["dataPersistency"] != "Persisted":
             logger.debug(
-                "View %s in %s ist nicht persistiert. Wird übersprungen...",
+                "View '%s' in '%s' ist nicht persistiert. "
+                "Wird übersprungen...",
                 view_name,
                 view_space,
             )
@@ -1028,7 +1062,7 @@ class Views(DatasphereAutomation):
 
         # Persistenz entfernen
         logger.debug(
-            "Entferne Persistenz für %s in %s...", view_name, view_space
+            "Entferne Persistenz für '%s' in '%s'...", view_name, view_space
         )
         self.session.headers.update(
             {"x-request-id": str(uuid4()).replace("-", "")}
@@ -1045,7 +1079,7 @@ class Views(DatasphereAutomation):
         # Ergebnis prüfen und taskLogId parsen
         if response.status_code != 202:
             logger.error(
-                "Fehler beim Entfernen der Persistenz für %s in %s. "
+                "Fehler beim Entfernen der Persistenz für '%s' in '%s'. "
                 "Wird übersprungen...",
                 view_name,
                 view_space,
@@ -1059,7 +1093,10 @@ class Views(DatasphereAutomation):
                 {"x-request-id": str(uuid4()).replace("-", "")}
             )
             response = await self.session.get(
-                url=f"{DATASPHERE_URL}/dwaas-core/tf/{view_space}/extendedlogs/{log_id}"
+                url=(
+                    f"{DATASPHERE_URL}/dwaas-core/tf"
+                    f"/{view_space}/extendedlogs/{log_id}"
+                )
             )
             return response.json()["logDetails"]
 
@@ -1074,7 +1111,7 @@ class Views(DatasphereAutomation):
                 latest_status != "COMPLETED" and latest_status != "RUNNING"
             ):
                 logger.error(
-                    "Fehler beim Entfernen der Persistenz für %s in %s.",
+                    "Fehler beim Entfernen der Persistenz für '%s' in '%s'.",
                     view_name,
                     view_space,
                 )
@@ -1086,13 +1123,15 @@ class Views(DatasphereAutomation):
             minutes, seconds = divmod(remainder, 60000)
             seconds, milliseconds = divmod(seconds, 1000)
             logger.debug(
-                f"Warte auf Ergebnisse für {view_name} in {view_space}. "
+                f"Warte auf Ergebnisse für '{view_name}' in '{view_space}'. "
                 f"Aktuelle Laufzeit: {hours:02}:{minutes:02}:{seconds:02}."
             )
             await asyncio.sleep(1)
 
         # Result-Datei aktualisieren
-        logger.info("Persistenz für %s in %s entfernt.", view_name, view_space)
+        logger.info(
+            "Persistenz für '%s' in '%s' entfernt.", view_name, view_space
+        )
         return True, log_details
 
     async def lock_partitions_until_year(self, year: int) -> None:
@@ -1215,6 +1254,10 @@ class Views(DatasphereAutomation):
                 }
                 writer.writerow(values)
 
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_PARTITION_LOCK_RESULT"]["absolute_path"]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)
+
     async def unlock_all_partitions(self) -> None:
         """
         Entsperrt alle Partitionen für alle Views,
@@ -1323,3 +1366,7 @@ class Views(DatasphereAutomation):
                     "unlockedPartitions": response.status_code == 201,
                 }
                 writer.writerow(values)
+
+        # Finales Logging mit Dateipfad
+        file_name = ALL_FILES["VIEW_PARTITION_UNLOCK_RESULT"]["absolute_path"]
+        logger.info("Ergebnisse gespeichert in '%s'.", file_name)

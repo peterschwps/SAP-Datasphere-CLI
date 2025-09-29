@@ -45,11 +45,13 @@ class RemoteTables(DatasphereAutomation):
         """
 
         # Alle Tabellennamen auslesen
-        response = await self.session.post(
-            url=f"{DATASPHERE_URL}/dwaas-core/statistics/BWBRIDGESPACE"
-            f"/remotetables?includeBusinessNames=true",
-            json={"includeBusinessNames": True},
-        )  # TODO: nochmal testen, war vorher als get aber mit json drin
+        logger.debug("Lade alle Remote Tables...")
+        response = await self.session.get(
+            url=(
+                f"{DATASPHERE_URL}/dwaas-core/statistics/BWBRIDGESPACE"
+                f"/remotetables?includeBusinessNames=true"
+            ),
+        )
         all_tables: StatisticsDict = {}
         for table in response.json()["tables"]:
             statistics_information: StatisticsInformationDict = {

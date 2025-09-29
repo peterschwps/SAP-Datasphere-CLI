@@ -596,11 +596,6 @@ class AnalyticalModels(DatasphereAutomation):
             view_name: str,
         ) -> None:
             # Persistierung starten
-            logger.debug(
-                "Starte Persistierung von View '%s' in '%s'...",
-                view_name,
-                view_space,
-            )
             persisted, log_details = await views._persist_view(
                 view_name, view_space
             )
@@ -695,3 +690,6 @@ class AnalyticalModels(DatasphereAutomation):
         else:
             for view in all_views_to_persist:
                 await persist_and_unpersist_view(*view)
+
+        # Finales Logging mit Dateipfad
+        logger.info("Ergebnisse gespeichert in '%s'.", file_path_results)
