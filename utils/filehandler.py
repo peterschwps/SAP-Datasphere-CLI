@@ -13,14 +13,14 @@ from utils.logging import logger
 
 # Pfade
 _PROJECT_NAME = "Datasphere"
-PROJECT_PATH = os.getcwd()
+_PROJECT_PATH = os.getcwd()
 DATA_DIR = Path(user_data_dir(_PROJECT_NAME))
-CONFIG_DIR = Path(user_config_dir(_PROJECT_NAME))
-COOKIES_FILE = os.path.join(CONFIG_DIR, ".cookies.json")
-SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.ini")
+_CONFIG_DIR = Path(user_config_dir(_PROJECT_NAME))
+COOKIES_FILE = os.path.join(_CONFIG_DIR, ".cookies.json")
+_SETTINGS_FILE = os.path.join(_CONFIG_DIR, "settings.ini")
 
 # Ordner erstellen, falls nicht vorhanden
-CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Format der Settings-Datei
 settings = configparser.ConfigParser()
@@ -58,23 +58,23 @@ def create_settings_file(is_wrong: bool = False) -> None:
         # CHROME, EDGE oder PLAYWRIGHT
         "BROWSER_TO_USE": "CHROME",
     }
-    with open(SETTINGS_FILE, "w") as settings_file:
+    with open(_SETTINGS_FILE, "w") as settings_file:
         settings.write(settings_file)
-    logger.info("Settings Datei erstellt in: %s", SETTINGS_FILE)
+    logger.info("Settings Datei erstellt in: %s", _SETTINGS_FILE)
     logger.debug("Datei wird geöffnet...")
     logger.debug("Bitte befüllen und Programm erneut starten...")
     with contextlib.suppress(Exception):
-        webbrowser.open(f"file://{SETTINGS_FILE}")
+        webbrowser.open(f"file://{_SETTINGS_FILE}")
     sys.exit()
 
 
 # Settings erstellen, falls nicht vorhanden
-if not os.path.isfile(SETTINGS_FILE):
+if not os.path.isfile(_SETTINGS_FILE):
     create_settings_file()
 
 # Sonst Settings laden
 else:
-    settings.read(SETTINGS_FILE)
+    settings.read(_SETTINGS_FILE)
 
 # Erforderliche Werte der Settings-Datei prüfen
 try:
@@ -209,7 +209,7 @@ def file_setup():
     # Absolute Dateipfade setzen
     for name, details in ALL_FILES.items():
         ALL_FILES[name]["absolute_path"] = os.path.join(
-            PROJECT_PATH, details["path"], details["name"]
+            _PROJECT_PATH, details["path"], details["name"]
         )
 
     # Fehlende Ordner erstellen

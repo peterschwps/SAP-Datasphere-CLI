@@ -40,7 +40,8 @@ logger.warning(
 logger.info("Programm wird beendet...")
 sys.exit(exit_code)
 
-# TODO: noch letztes bisschen Logging von Selenium wegbekommen
+
+# TODO: noch letztes bisschen Logging von Selenium auf Windows wegbekommen
 # TODO: Funktion best Views per View Analyzer mit allen analytischen Modellen
 #       machen
 # TODO: überall Threads einbauen? Evtl. in Automation eine run() Methode, die
@@ -50,8 +51,5 @@ sys.exit(exit_code)
 
 # Weitere TODO:
 # - Idee: Automatisierung von View-Transporten?
-# - env Datei mit wichtigen Variablen erstellen (automatisiert per
-#   FilerHandler) und dann GitHub pushen?
 # - Updates von Headern besser organisieren? Dass immer volle Headers gesetzt
 #   werden?
-# - kleinen Server parallel anbieten, der lokal immer läuft? Oder deploybar ist
