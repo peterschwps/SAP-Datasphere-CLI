@@ -1,8 +1,7 @@
-import concurrent.futures
-from copy import deepcopy
+import asyncio
 from datetime import datetime
 
-import requests
+import httpx
 from dateutil import tz
 
 from datasphere.automation import DatasphereAutomation
@@ -22,11 +21,21 @@ DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
 
 
 class RemoteTables(DatasphereAutomation):
-    def __init__(self, session: requests.Session | None = None):
-        # DatasphereAutomation initialisieren
-        super().__init__(session)
+    def __init__(self, session: httpx.AsyncClient | None = None):
+        if session is not None:
+            self.session = session
+        else:
+            super().__init__()
 
-    def _get_all_table_names(self) -> StatisticsDict:
+    async def initialize(self) -> None:
+        """
+        Initialisiert die Datasphere Session.
+        """
+        self.session: httpx.AsyncClient = await (
+            self.initialize_datasphere_session()
+        )
+
+    async def _get_all_table_names(self) -> StatisticsDict:
         """
         Gibt alle Tabellennamen als formatiertes Dictionary zurück.
 
@@ -36,10 +45,12 @@ class RemoteTables(DatasphereAutomation):
         """
 
         # Alle Tabellennamen auslesen
-        response = self.session.get(
-            url=f"{DATASPHERE_URL}/dwaas-core/statistics/BWBRIDGESPACE"
-            f"/remotetables?includeBusinessNames=true",
-            json={"includeBusinessNames": True},
+        logger.debug("Lade alle Remote Tables...")
+        response = await self.session.get(
+            url=(
+                f"{DATASPHERE_URL}/dwaas-core/statistics/BWBRIDGESPACE"
+                f"/remotetables?includeBusinessNames=true"
+            ),
         )
         all_tables: StatisticsDict = {}
         for table in response.json()["tables"]:
@@ -70,7 +81,9 @@ class RemoteTables(DatasphereAutomation):
 
         return all_tables
 
-    def create_statistics(self, type: StatisticsType = "HISTOGRAM") -> None:
+    async def create_statistics(
+        self, type: StatisticsType = "HISTOGRAM"
+    ) -> None:
         """
         Erstellt Statistiken für alle Tabellen.
 
@@ -79,7 +92,7 @@ class RemoteTables(DatasphereAutomation):
         """
 
         # Alle Tabellennamen lesen
-        all_tables = self._get_all_table_names()
+        all_tables = await self._get_all_table_names()
 
         # Über alle Tabellennamen iterieren und Statistik erstellen
         for table in all_tables:
@@ -89,13 +102,13 @@ class RemoteTables(DatasphereAutomation):
                 and all_tables[table]["statisticsType"] != type
             ):
                 if all_tables[table]["statisticsType"] is None:
-                    response = self.session.post(
+                    response = await self.session.post(
                         url=f"{DATASPHERE_URL}/dwaas-core/statistics"
                         f"/BWBRIDGESPACE/remoteTables/{table}?type={type}",
                         json={"type": type},
                     )
                 elif all_tables[table]["statisticsType"] != type:
-                    response = self.session.put(
+                    response = await self.session.put(
                         url=f"{DATASPHERE_URL}/dwaas-core/statistics"
                         f"/BWBRIDGESPACE/remoteTables/{table}?type={type}",
                         json={"type": type},
@@ -122,28 +135,28 @@ class RemoteTables(DatasphereAutomation):
                     )
                     logger.debug("Response: %s\n", response.text)
 
-    def refresh_statistics(
-        self, use_threads: bool = True, thread_count: int = 5
-    ) -> None:
+    async def refresh_statistics(self, thread_count: int = 5) -> None:
         """
         Aktualisiert Statistiken für alle Tabellen in der
         Datei 'table_names.txt'.
+
+        Args:
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 5.
         """
 
         # Alle Tabellennamen lesen
-        all_tables = self._get_all_table_names()
+        all_tables = await self._get_all_table_names()
 
         # Funktion, um Statistiken zu aktualisieren
         # Nur Statistiken anlegen bei Tabellen, die sie unterstützen
         # und eine Statistik haben
-        def refresh_statistics_for_table(
-            session: requests.Session, table: str
-        ) -> None:
+        async def refresh_statistics_for_table(table: str) -> None:
             if (
                 all_tables[table]["statisticsSupported"]
                 and all_tables[table]["statisticsType"] is not None
             ):
-                response = session.post(
+                response = await self.session.post(
                     url=f"{DATASPHERE_URL}/dwaas-core/statistics/"
                     f"BWBRIDGESPACE/remoteTables/{table}/refresh"
                 )
@@ -161,19 +174,21 @@ class RemoteTables(DatasphereAutomation):
                     logger.debug("Response: %s\n", response.text)
 
         # Falls Threads genutzt werden sollen
-        if use_threads:
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=thread_count
-            ) as executor:
-                for table in all_tables:
-                    executor.submit(
-                        refresh_statistics_for_table,
-                        deepcopy(self.session),
-                        table,
-                    )
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for table in all_tables:
+
+                async def process_table(table_name):
+                    async with semaphore:
+                        await refresh_statistics_for_table(table_name)
+
+                task = asyncio.create_task(process_table(table))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
 
         # Falls keine Threads genutzt werden sollen
         else:
             # Über alle Tabellennamen iterieren und Statistik aktualisieren
             for table in all_tables:
-                refresh_statistics_for_table(self.session, table)
+                await refresh_statistics_for_table(table)

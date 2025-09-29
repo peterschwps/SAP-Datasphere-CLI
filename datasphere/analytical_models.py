@@ -1,13 +1,11 @@
-import concurrent.futures
+import asyncio
 import csv
 import json
-import threading
 from copy import deepcopy
-from time import sleep
 from urllib.parse import quote, urlencode
 from uuid import uuid4
 
-import requests
+import httpx
 
 from datasphere.automation import DatasphereAutomation
 from datasphere.views import Views
@@ -23,11 +21,23 @@ DATASPHERE_URL: str = settings["URLs"][URL_TO_USE]
 
 
 class AnalyticalModels(DatasphereAutomation):
-    def __init__(self, session: requests.Session | None = None):
-        # DatasphereAutomation initialisieren
-        super().__init__(session)
+    def __init__(self, session: httpx.AsyncClient | None = None):
+        if session is not None:
+            self.session = session
+        else:
+            super().__init__()
 
-    def _get_all_analytical_models(self) -> list[AnalyticalModelsDetailsDict]:
+    async def initialize(self) -> None:
+        """
+        Initialisiert die Datasphere Session.
+        """
+        self.session: httpx.AsyncClient = await (
+            self.initialize_datasphere_session()
+        )
+
+    async def _get_all_analytical_models(
+        self,
+    ) -> list[AnalyticalModelsDetailsDict]:
         """
         Gibt alle Analytical Models als Liste von Dictionaries zurück.
 
@@ -79,8 +89,8 @@ class AnalyticalModels(DatasphereAutomation):
                 'OR technical_type:EQ(S):"DWC_TRANSFORMATIONFLOW")) *\'))'
             ),
         }
-        response = self.session.get(
-            url=url, params=urlencode(params, safe="()*", quote_via=quote)
+        response = await self.session.get(
+            url=f"{url}?{urlencode(params, safe='()*', quote_via=quote)}"
         )
         all_analytical_models: list[AnalyticalModelsDetailsDict] = (
             response.json()["value"]
@@ -95,7 +105,7 @@ class AnalyticalModels(DatasphereAutomation):
 
         return all_analytical_models
 
-    def _get_all_analytical_models_from_space(
+    async def _get_all_analytical_models_from_space(
         self, space_name: str
     ) -> list[AnalyticalModelsDetailsDict]:
         """
@@ -112,12 +122,12 @@ class AnalyticalModels(DatasphereAutomation):
         # Alle analytischen Modelle abrufen
         all_analytical_models_in_space = [
             model
-            for model in self._get_all_analytical_models()
+            for model in await self._get_all_analytical_models()
             if model["space_name"] == space_name
         ]
         return all_analytical_models_in_space
 
-    def _get_all_views_for_analytical_model(
+    async def _get_all_views_for_analytical_model(
         self, analytical_model_id: str
     ) -> dict[str, dict[str, str]]:
         """
@@ -167,7 +177,7 @@ class AnalyticalModels(DatasphereAutomation):
                 "csn.derivation.lookupEntity,csn.valueHelp.entity"
             ),
         }
-        response = self.session.get(url=url, params=params)
+        response = await self.session.get(url=url, params=params)
         model_details = response.json()[0]
 
         # Funktion zur rekursiven Iteration implementieren
@@ -190,7 +200,7 @@ class AnalyticalModels(DatasphereAutomation):
         }
         return analytical_model_to_view_mapping
 
-    def get_all_views_for_analytical_models(
+    async def get_all_views_for_analytical_models(
         self, skip_duplicates: bool = False
     ) -> None:
         """
@@ -221,13 +231,14 @@ class AnalyticalModels(DatasphereAutomation):
 
         # Alle analytischen Modelle abrufen
         logger.debug("Lade alle Analytischen Modelle...")
-        all_analytical_models = self._get_all_analytical_models()
+        all_analytical_models = await self._get_all_analytical_models()
         analytical_models_with_views = {}
 
         # Alle Views abrufen
         views = Views(self.session)
         all_views_list = [
-            (view["id"], view["space_name"]) for view in views._get_all_views()
+            (view["id"], view["space_name"])
+            for view in await views._get_all_views()
         ]
 
         # Über alle Modelle iterieren
@@ -237,7 +248,9 @@ class AnalyticalModels(DatasphereAutomation):
                 model["name"],
                 model["space_name"],
             )
-            all_views = self._get_all_views_for_analytical_model(model["id"])
+            all_views = await self._get_all_views_for_analytical_model(
+                model["id"]
+            )
 
             # Views herausfiltern, die schon in anderen Modellen vorkommen,
             # wenn skip_duplicates = True
@@ -282,7 +295,7 @@ class AnalyticalModels(DatasphereAutomation):
             ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS"]["absolute_path"],
         )
 
-    def get_all_views_for_analytical_models_in_space(
+    async def get_all_views_for_analytical_models_in_space(
         self, space_name: str, skip_duplicates: bool = False
     ) -> None:
         """
@@ -320,13 +333,14 @@ class AnalyticalModels(DatasphereAutomation):
             space_name,
         )
         all_analytical_models_in_space = (
-            self._get_all_analytical_models_from_space(space_name)
+            await self._get_all_analytical_models_from_space(space_name)
         )
 
         # Alle Views abrufen
         views = Views(self.session)
         all_views_list = [
-            (view["id"], view["space_name"]) for view in views._get_all_views()
+            (view["id"], view["space_name"])
+            for view in await views._get_all_views()
         ]
 
         # Über alle Modelle iterieren
@@ -336,7 +350,9 @@ class AnalyticalModels(DatasphereAutomation):
                 "Lade alle Views für das Analytische Modell '%s'...",
                 model["name"],
             )
-            all_views = self._get_all_views_for_analytical_model(model["id"])
+            all_views = await self._get_all_views_for_analytical_model(
+                model["id"]
+            )
 
             # Views herausfiltern, die schon in anderen Modellen vorkommen,
             # wenn skip_duplicates = True
@@ -379,8 +395,8 @@ class AnalyticalModels(DatasphereAutomation):
             json.dump(analytical_models_with_views_in_space, file, indent=4)
         logger.info("Ergebnisse gespeichert in '%s'.", file_name)
 
-    def check_runtime_for_all_views_of_analytical_models(
-        self, use_threads: bool = True, thread_count: int = 1
+    async def check_runtime_for_all_views_of_analytical_models(
+        self, thread_count: int = 1
     ) -> None:
         """
         Prüft die Laufzeit aller Views für die Analytischen Modelle, die in der
@@ -391,11 +407,8 @@ class AnalyticalModels(DatasphereAutomation):
         ANALYTICAL_MODELS_ALL_VIEWS_PERSISTENCE_TIME_RESULT.
 
         Args:
-            use_threads (bool, optional): Wenn True, werden die Tasks parallel
-                                          ausgeführt. Standard ist True.
-            thread_count (int, optional): Anzahl der Threads, die parallel
-                                          ausgeführt werden sollen.
-                                          Standard ist 1.
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
 
         # Task-Datei lesen
@@ -415,7 +428,7 @@ class AnalyticalModels(DatasphereAutomation):
         # Alle Analytischen Modelle abrufen und Mapping von ID erstellen
         # (brauche ich für Methode)
         logger.debug("Lade alle Analytischen Modelle...")
-        all_analytical_models = self._get_all_analytical_models()
+        all_analytical_models = await self._get_all_analytical_models()
         models_mapping_id_to_name_and_space = {
             model["id"]: (model["name"], model["space_name"])
             for model in all_analytical_models
@@ -424,7 +437,8 @@ class AnalyticalModels(DatasphereAutomation):
         # Alle Views abrufen
         views = Views(self.session)
         all_views_list = [
-            (view["id"], view["space_name"]) for view in views._get_all_views()
+            (view["id"], view["space_name"])
+            for view in await views._get_all_views()
         ]
 
         # Views für alle Analytischen Modelle abrufen
@@ -445,7 +459,7 @@ class AnalyticalModels(DatasphereAutomation):
                         "Lade alle Views für das Analytische Modell '%s'...",
                         model["modelname"],
                     )
-                    all_views = self._get_all_views_for_analytical_model(
+                    all_views = await self._get_all_views_for_analytical_model(
                         model_id
                     )
 
@@ -524,43 +538,32 @@ class AnalyticalModels(DatasphereAutomation):
             model_id: str,
             view_id: str,
             runtime: int | None,
-            lock: threading.Lock | None = None,
         ) -> None:
-            if lock:
-                lock.acquire()
             analytical_models_with_views_readable[model_id]["dependencies"][
                 view_id
             ]["runtime"] = runtime
-            if lock:
-                lock.release()
 
         # Funktion um Analytische Modelle zu speichern
         file_path_results = ALL_FILES[
             "ANALYTICAL_MODELS_ALL_VIEWS_PERSISTENCE_TIME_RESULT"
         ]["absolute_path"]
 
-        def save_results(lock: threading.Lock | None = None) -> None:
-            if lock:
-                lock.acquire()
+        def save_results() -> None:
             with open(file_path_results, "w") as file:
                 json.dump(
                     analytical_models_with_views_readable, file, indent=4
                 )
-            if lock:
-                lock.release()
 
         # Funktion, um Persistenz zu prüfen
-        def check_if_persisted(
-            session: requests.Session, view_name: str, view_space: str
-        ) -> bool:
+        async def check_if_persisted(view_name: str, view_space: str) -> bool:
             url = (
                 f"{DATASPHERE_URL}/dwaas-core/monitor/{view_space}/"
                 f"persistedViews/{view_name}"
             )
             for _ in range(3):
-                response = session.get(url=url)
+                response = await self.session.get(url=url)
                 if response.status_code != 200:
-                    sleep(3)
+                    await asyncio.sleep(3)
                     continue
                 return (
                     response.json().get("dataPersistency", "") == "Persisted"
@@ -575,8 +578,8 @@ class AnalyticalModels(DatasphereAutomation):
         logger.debug("Prüfe, ob Views bereits persistiert sind...")
         for model_data in analytical_models_with_views_readable.values():
             for view_data in model_data["dependencies"].values():
-                if check_if_persisted(
-                    self.session, view_data["name"], view_data["space"]
+                if await check_if_persisted(
+                    view_data["name"], view_data["space"]
                 ):
                     view_data["alreadyPersisted"] = True
 
@@ -586,22 +589,15 @@ class AnalyticalModels(DatasphereAutomation):
 
         # Funktion, für Persistierung und anschließendes Entfernen der
         # Persistenz
-        def persist_and_unpersist_view(
-            session: requests.Session,
+        async def persist_and_unpersist_view(
             model_id: str,
             view_id: str,
             view_space: str,
             view_name: str,
-            lock: threading.Lock | None = None,
         ) -> None:
             # Persistierung starten
-            logger.debug(
-                "Starte Persistierung von View '%s' in '%s'...",
-                view_name,
-                view_space,
-            )
-            persisted, log_details = views._persist_view(
-                session, view_name, view_space
+            persisted, log_details = await views._persist_view(
+                view_name, view_space
             )
             runtime = round(log_details.get("runTime", -1000) / 1000)
 
@@ -613,9 +609,9 @@ class AnalyticalModels(DatasphereAutomation):
                     view_space,
                 )
                 update_runtime(
-                    model_id, view_id, runtime if runtime > 0 else None, lock
+                    model_id, view_id, runtime if runtime > 0 else None
                 )
-                save_results(lock)
+                save_results()
 
                 # Persistenz entfernen, wenn nicht vorher persistiert war
                 if not analytical_models_with_views_readable[model_id][
@@ -626,8 +622,8 @@ class AnalyticalModels(DatasphereAutomation):
                         view_name,
                         view_space,
                     )
-                    unpersisted, _ = views._unpersist_view(
-                        session, view_name, view_space
+                    unpersisted, _ = await views._unpersist_view(
+                        view_name, view_space
                     )
 
                     # Speichern bei erfolgreicher Entpersistierung
@@ -637,14 +633,10 @@ class AnalyticalModels(DatasphereAutomation):
                             view_name,
                             view_space,
                         )
-                        if lock:
-                            lock.acquire()
                         analytical_models_with_views_readable[model_id][
                             "dependencies"
                         ][view_id]["removedPersistency"] = True
-                        if lock:
-                            lock.release()
-                        save_results(lock)
+                        save_results()
 
                     else:
                         logger.critical(
@@ -667,9 +659,8 @@ class AnalyticalModels(DatasphereAutomation):
                         model_id,
                         view_id,
                         runtime if runtime > 0 else None,
-                        lock,
                     )
-                    save_results(lock)
+                    save_results()
 
             else:
                 logger.critical(
@@ -683,19 +674,22 @@ class AnalyticalModels(DatasphereAutomation):
 
         # Tasks starten und Zeit loggen
         logger.debug("Starte Tasks...")
-        if use_threads:
-            lock = threading.Lock()
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=thread_count
-            ) as executor:
-                for view in all_views_to_persist:
-                    executor.submit(
-                        persist_and_unpersist_view,
-                        deepcopy(self.session),
-                        *view,
-                        lock=lock,
-                    )
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for view in all_views_to_persist:
+
+                async def process_view(view):
+                    async with semaphore:
+                        await persist_and_unpersist_view(*view)
+
+                task = asyncio.create_task(process_view(view))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
 
         else:
             for view in all_views_to_persist:
-                persist_and_unpersist_view(self.session, *view)
+                await persist_and_unpersist_view(*view)
+
+        # Finales Logging mit Dateipfad
+        logger.info("Ergebnisse gespeichert in '%s'.", file_path_results)

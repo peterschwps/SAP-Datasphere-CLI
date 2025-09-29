@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os.path
 import re
@@ -6,9 +7,9 @@ from random import randint
 from time import sleep, time
 from urllib.parse import urlparse
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 from rich import get_console
 from rich.prompt import Prompt
 from selenium import webdriver
@@ -54,27 +55,27 @@ AUTH_URL: str = f"https://{SUBDOMAIN}.authentication.eu10.hana.ondemand.com"
 
 
 class DatasphereAutomation:
-    def __init__(self, session: requests.Session | None = None):
-        """
-        Initialisiert die Datasphere Automation, falls noch keine Session
-        existiert.
-        """
-        if session is not None:
-            self.session = session
-        else:
-            self._initialize_datasphere_session()
+    def __init__(self):
+        self.session: httpx.AsyncClient = httpx.AsyncClient(
+            timeout=60.0,
+            follow_redirects=True,
+        )
 
-    def _initialize_datasphere_session(self) -> None:
+    async def initialize_datasphere_session(self) -> httpx.AsyncClient:
         """
         Initialisiert die Datasphere Session für alle weiteren Methoden.
         Lädt Cookies aus der COOKIES_FILE, falls diese existiert oder
         initialisiert eine erneute Anmeldung.
+
+        Löscht die Cookie-Datei und beendet das Programm, falls ein Fehler
+        auftritt.
+
+        Returns:
+            httpx.AsyncClient: Initialisierte Datasphere Session.
         """
 
         # TODO: noch allgemeines Error Handling, dass Cookies löscht und
         # User benachrichtigt, dass er neustarten soll
-
-        self.session = requests.Session()
         self.session.headers.update(
             {
                 "User-Agent": (
@@ -96,18 +97,27 @@ class DatasphereAutomation:
             logger.info("Lade Cookies aus vorheriger Session...")
             # TODO: vielleicht nicht alle Cookies laden, sondern nur ESTAUTH
             with open(COOKIES_FILE) as cookie_file:
-                cookies = json.load(cookie_file)
+                # Cookies aus Datei laden
+                try:
+                    cookies = json.load(cookie_file)
+                except json.decoder.JSONDecodeError:
+                    logger.critical("Unbekannter Fehler. Entferne Cookies...")
+                    if os.path.isfile(COOKIES_FILE):
+                        os.remove(COOKIES_FILE)
+                    logger.error("Bitte erneut starten...")
+                    sys.exit(1)
+
+                # Cookies in Session laden
                 for cookie in cookies:
                     self.session.cookies.set(
                         name=cookie["name"],
                         value=cookie["value"],
                         domain=cookie["domain"],
                         path=cookie["path"],
-                        secure=cookie["secure"],
                     )
 
             # Prüfen, ob Cookie Session noch aktiv (1 Stunde)
-            response = self.session.get(
+            response = await self.session.get(
                 url=f"{DATASPHERE_URL}/sap/fpa/services/rest/epm/session",
                 params={"action": "logon"},
             )
@@ -127,14 +137,14 @@ class DatasphereAutomation:
                         "X-Csrf-Token": response.headers["X-Csrf-Token"],
                     }
                 )
-                return
+                return self.session
 
         # Falls keine Cookies gefunden wurden
         else:
             logger.debug("Keine Cookies gefunden.")
 
         # Authentifizierung/Refresh starten
-        self._refresh_session()
+        await self._refresh_session()
 
         # Prüfen, ob Login erfolgreich
         self.session.headers.update(
@@ -146,7 +156,7 @@ class DatasphereAutomation:
                 "X-Requested-With": "XMLHttpRequest",
             }
         )
-        response = self.session.get(
+        response = await self.session.get(
             url=f"{DATASPHERE_URL}/sap/fpa/services/rest/epm/session",
             params={"action": "logon"},
         )
@@ -169,10 +179,11 @@ class DatasphereAutomation:
                 "X-Csrf-Token": response.headers["X-Csrf-Token"],
             }
         )
+        return self.session
 
-    def _start_login(
-        self, response: requests.Response
-    ) -> tuple[bool, requests.Response]:
+    async def _start_login(
+        self, response: httpx.Response
+    ) -> tuple[bool, httpx.Response]:
         """
         Startet den Login per Requests oder Browser.
         Nutzt dafür den Wert aus der Settings-Datei.
@@ -181,28 +192,28 @@ class DatasphereAutomation:
         Requests Session.
 
         Returns:
-            tuple[bool, requests.Response]: Bei Requests True als Indikator,
-                                            dass der Flow weiter fortgeführt
-                                            werden muss (damit persistente
-                                            Auth-Cookies gespeichert werden.)
-                                            Bei Browser False, um den weiteren
-                                            Refresh-Session-Flow direkt zu
-                                            beenden.
-                                            Bei Requests wird die letzte
-                                            Response zurückgegeben. Bei Browser
-                                            wird derselbe Parameter
-                                            zurückgegeben, der als Input
-                                            übergeben wurde.
+            tuple[bool, httpx.Response]: Bei Requests True als Indikator,
+                                         dass der Flow weiter fortgeführt
+                                         werden muss (damit persistente
+                                         Auth-Cookies gespeichert werden.)
+                                         Bei Browser False, um den weiteren
+                                         Refresh-Session-Flow direkt zu
+                                         beenden.
+                                         Bei Requests wird die letzte
+                                         Response zurückgegeben. Bei Browser
+                                         wird derselbe Parameter
+                                         zurückgegeben, der als Input
+                                         übergeben wurde.
         """  # TODO: nochmal gucken, wie Docstring richtig formatieren, sieht komisch aus in Schnellübersicht  # noqa: E501
         if AUTHENTICATION_METHOD.upper() == "REQUESTS":
             logger.debug("Starte Microsoft SSO Login per Requests...")
-            response = self._start_requests_authentication(response)
+            response = await self._start_requests_authentication(response)
             return True, response
 
         elif AUTHENTICATION_METHOD.upper() == "BROWSER":
             if BROWSER_TO_USE.upper() == "PLAYWRIGHT":
                 logger.debug("Starte Login per Playwright...")
-                self._start_browser_login_playwright()
+                await self._start_browser_login_playwright()
             else:
                 logger.debug("Starte Login per Browser...")
                 self._start_browser_authentication()
@@ -214,7 +225,6 @@ class DatasphereAutomation:
                         value=cookie["value"],
                         domain=cookie["domain"],
                         path=cookie["path"],
-                        secure=cookie["secure"],
                     )
             return False, response
 
@@ -225,7 +235,7 @@ class DatasphereAutomation:
             )
             sys.exit(1)
 
-    def _refresh_session(self) -> None:
+    async def _refresh_session(self) -> None:
         """
         Aktualisiert die Datasphere Session mit den persistenten Auth-Cookies.
         Speichert die aktualisierten Cookies ab.
@@ -251,8 +261,8 @@ class DatasphereAutomation:
         )
 
         # 1. Request: https://<subdomain>.eu10.hcs.cloud.sap/dwaas-core/index.html
-        response = self.session.get(
-            url=f"{DATASPHERE_URL}/dwaas-core/index.html"
+        response = await self.session.get(
+            url=f"{DATASPHERE_URL}/dwaas-core/index.html",
         )
         oauth_url_result = re.search(r'location="([^"]+)"', response.text)
         if not oauth_url_result:
@@ -274,23 +284,20 @@ class DatasphereAutomation:
         self.session.cookies.set(
             name="fragmentAfterLogin",
             value="#/home",
-            domain=datasphere_domain,
+            domain=str(datasphere_domain),
             path="/",
-            secure=True,
         )
         self.session.cookies.set(
             name="locationAfterLogin",
             value="/dwaas-core/index.html",
-            domain=datasphere_domain,
+            domain=str(datasphere_domain),
             path="/",
-            secure=True,
         )
         self.session.cookies.set(
             name="signature",
             value=signature_cookie_value,
-            domain=datasphere_domain,
+            domain=str(datasphere_domain),
             path="/",
-            secure=True,
         )
 
         # 2. Request: https://<subdomain>.authentication.eu10.hana.ondemand.com/oauth/authorize
@@ -302,7 +309,7 @@ class DatasphereAutomation:
                 "Accept-Language": "de",
             }
         )
-        response = self.session.get(url=oauth_url)
+        response = await self.session.get(url=oauth_url)
 
         # SAML Link parsen
         soup = BeautifulSoup(response.text, "html.parser")
@@ -312,13 +319,13 @@ class DatasphereAutomation:
         # Weiterleitung an: https://<subdomain>.authentication.eu10.hana.ondemand.com/saml/login/alias/<subdomain>.aws-live-eu10
         # erneute Weiterleitung an: https://login.microsoftonline.com/<tenant_id>/saml2
         self.session.headers.update({"Referer": f"{AUTH_URL}/login"})
-        response = self.session.get(url=saml_url)
+        response = await self.session.get(url=saml_url)
 
         # Prüfen, ob Bestätigung per MFA erforderlich
         # (nicht mehr im Hintergrund angemeldet)
         # --> Login starten
         if "<title>Working...</title>" not in response.text:
-            proceed, response = self._start_login(response)
+            proceed, response = await self._start_login(response)
 
             # Falls Browser-Login durchgeführt wurde
             if not proceed:
@@ -338,7 +345,7 @@ class DatasphereAutomation:
         self.session.headers.update(
             {"Referer": "https://login.microsoftonline.com/"}
         )
-        response = self.session.post(url=SSO_URL, data=data)
+        response = await self.session.post(url=SSO_URL, data=data)
 
         # Cookies in Datei speichern
         logger.info("Speichere Cookies...")
@@ -352,7 +359,7 @@ class DatasphereAutomation:
                         "secure": cookie.secure,
                         "value": cookie.value,
                     }
-                    for cookie in self.session.cookies
+                    for cookie in self.session.cookies.__dict__["jar"]
                 ],
                 cookies_file,
             )
@@ -366,21 +373,21 @@ class DatasphereAutomation:
         ):
             self.session.headers.pop(header)
 
-    def _start_requests_authentication(
-        self, response: requests.Response
-    ) -> requests.Response:
+    async def _start_requests_authentication(
+        self, response: httpx.Response
+    ) -> httpx.Response:
         """
         Startet den Microsoft SSO Login per Requests.
         Sendet einen Code an die Authenticator App von Microsoft. Fragt dafür
         Username und Passwort per Prompt der Rich Console ab.
 
         Args:
-            response (requests.Response): Reponse der letzten vorherigen
-                                          Anfrage (Konfiguration für MFA).
+            response (httpx.Response): Reponse der letzten vorherigen
+                                       Anfrage (Konfiguration für MFA).
 
         Returns:
-            requests.Response: Response der letzten Anfrage (Auth-Verarbeitung
-                               nach erfolgreicher MFA).
+            httpx.Response: Response der letzten Anfrage (Auth-Verarbeitung
+                            nach erfolgreicher MFA).
         """
 
         # Globale Rich Console speichern
@@ -445,10 +452,10 @@ class DatasphereAutomation:
                 "hpgrequestid": config_data["sessionId"],
                 "DNT": "1",
                 "Origin": "https://login.microsoftonline.com",
-                "Referer": response.url,
+                "Referer": str(response.url),
             }
         )
-        response = self.session.post(url=url, json=data)
+        response = await self.session.post(url=url, json=data)
         flow_token = response.json()["FlowToken"]
 
         # Headers wieder entfernen
@@ -506,7 +513,7 @@ class DatasphereAutomation:
                 ),
             }
         )
-        response = self.session.post(url=login_url, data=data)
+        response = await self.session.post(url=login_url, data=data)
 
         # Neue Config parsen
         config_data_result = re.search(r"\$Config=({.*?});", response.text)
@@ -535,10 +542,10 @@ class DatasphereAutomation:
                 "Accept": "application/json",
                 "hpgrequestid": config_data["sessionId"],
                 "Origin": "https://login.microsoftonline.com",
-                "Referer": response.url,
+                "Referer": str(response.url),
             }
         )
-        response = self.session.post(url=begin_auth_url, json=data)
+        response = await self.session.post(url=begin_auth_url, json=data)
         auth_data = response.json()
 
         # Authenticator Code ausgeben
@@ -575,9 +582,8 @@ class DatasphereAutomation:
         ctx = None
         while True:
             last_poll_start_time = round(time() * 1000)
-            challenge_data = self.session.get(
-                url=end_auth_url, params=params
-            ).json()
+            response = await self.session.get(url=end_auth_url, params=params)
+            challenge_data = response.json()
             last_poll_end_time = round(time() * 1000)
             if challenge_data["ResultValue"] != "AuthenticationPending":
                 flow_token = challenge_data["FlowToken"]
@@ -628,7 +634,7 @@ class DatasphereAutomation:
                 ),
             }
         )
-        response = self.session.post(url=process_auth_url, data=data)
+        response = await self.session.post(url=process_auth_url, data=data)
         self.session.headers.pop("Origin")
         return response
 
@@ -719,7 +725,7 @@ class DatasphereAutomation:
             ef_driver.quit()
 
     # TODO: In Guide: 'playwright install' muss manuell ausgeführt werden
-    def _start_browser_login_playwright(self) -> None:
+    async def _start_browser_login_playwright(self) -> None:
         """
         Konfiguriert den Playwright-Browser zur manuellen Anmeldung.
         Lädt Cookies aus dem Browser und schließt ihn dann wieder.
@@ -733,30 +739,30 @@ class DatasphereAutomation:
             os.mkdir(browser_data_path)
 
         # Playwright-Browser starten
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch_persistent_context(
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch_persistent_context(
                 user_data_dir=browser_data_path,
                 headless=False,
                 args=["--start-maximized"],
                 no_viewport=True,
             )
-            page = browser.new_page()
+            page = await browser.new_page()
 
             # Seite öffnen und auf Login warten
             logger.debug(
                 "Lade Datasphere Homepage im Browser. "
                 "Bitte manuell anmelden..."
             )
-            page.goto(DATASPHERE_URL)
-            page.wait_for_selector(
+            await page.goto(DATASPHERE_URL)
+            await page.wait_for_selector(
                 "#__title0", timeout=300000
             )  # 5 Minuten Timeout
 
             # Kurze Wartezeit für zusätzliche Sicherheit
-            sleep(3)
+            await asyncio.sleep(3)
 
             # Alle Cookies aus allen Domains sammeln
-            all_cookies = browser.cookies()
+            all_cookies = await browser.cookies()
             logger.info("Speichere Cookies...")
             with open(COOKIES_FILE, "w", encoding="utf-8") as cookie_file:
                 json.dump(
@@ -764,4 +770,4 @@ class DatasphereAutomation:
                 )
 
             # Browser beenden
-            browser.close()
+            await browser.close()

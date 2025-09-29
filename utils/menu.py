@@ -208,10 +208,7 @@ class Menu:
             )
             if use_threads:
                 thread_count = self.int_prompt.ask("Anzahl der Threads")
-                self.all_params["use_threads"] = use_threads
                 self.all_params["thread_count"] = thread_count
-            else:
-                self.all_params["use_threads"] = use_threads
 
         # Gewählte Klasse und Methode filtern
         # Analytische Modelle
