@@ -3,6 +3,7 @@ import json
 import os.path
 import re
 import sys
+from collections.abc import Callable, Iterable
 from random import randint
 from time import sleep, time
 from urllib.parse import urlparse
@@ -771,3 +772,39 @@ class DatasphereAutomation:
 
             # Browser beenden
             await browser.close()
+
+    async def run_async_tasks(self, items: Iterable, function: Callable,
+    thread_count: int = 1) -> None:
+        """
+        Führt die übergebene Funktion aus. Parallelisiert die Tasks, falls der
+        Thread-Count größer als 1 ist.
+
+        Args:
+            items (list): Liste der Elemente, die als Argumente an die Funktion
+                          übergeben werden.
+            function (Callable): Funktion, die ausgeführt werden soll.
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
+        """
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for item in items:
+
+                async def process_item(item):
+                    async with semaphore:
+                        if isinstance(item, (list, tuple)):
+                            await function(*item)
+                        else:
+                            await function(item)
+
+                task = asyncio.create_task(process_item(item))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
+
+        else:
+            for item in items:
+                if isinstance(item, (list, tuple)):
+                    await function(*item)
+                else:
+                    await function(item)

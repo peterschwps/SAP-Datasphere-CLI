@@ -108,13 +108,16 @@ class Views(DatasphereAutomation):
 
         return all_views
 
-    async def get_all_views_where_attribute_contains(self, word: str) -> None:
+    async def get_all_views_where_attribute_contains(self, word: str,
+    thread_count: int = 1) -> None:
         """
         Gibt alle Views als CSV-Datei aus, die ein Attribut haben,
         dass das Suchwort enthält.
 
         Args:
             word (str): Suchwort (case-insensitive).
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
         # Alle Views abfragen
         all_views = await self._get_all_views()
@@ -134,27 +137,29 @@ class Views(DatasphereAutomation):
             "dass den Substring '%s' enthält...",
             word,
         )
-        params = {
-            "ids": "",
-            "details": (
-                "id,#repairedCsn,#ownerBusinessName,#creatorBusinessName,"
-                "#repositoryPackage,@EnterpriseSearch.enabled,@remote.source,"
-                "@DataWarehouse.external.schema,#objectPathIdentifier,"
-                "#repositoryPackage,#repositoryValidationDate,hasPendingError,"
-                "#isI18nEnabled"
-            ),
-            "kinds": (
-                "entity,view,sap.dwc.ermodel,sap.dis.dataflow,"
-                "sap.dwc.taskChain,sap.dwc.analyticModel,"
-                "sap.dwc.dac,sap.repo.folder,sap.dis.replicationflow,"
-                "sap.dis.transformationflow,sap.dwc.perspective,"
-                "sap.dwc.consumptionModel,sap.dwc.factModel,"
-                "sap.dwc.businessEntity,sap.dwc.authscenario"
-            ),
-        }
-        for view in all_views:
+
+        # Funktion, um zu prüfen ob View ein passendes Attribut hat
+        async def check_view_for_attribute_with_substring(view) -> None:
+
             # Parameter anpassen
-            params["ids"] = view["id"]
+            params = {
+                "ids": view["id"],
+                "details": (
+                    "id,#repairedCsn,#ownerBusinessName,#creatorBusinessName,"
+                    "#repositoryPackage,@EnterpriseSearch.enabled,@remote.source,"
+                    "@DataWarehouse.external.schema,#objectPathIdentifier,"
+                    "#repositoryPackage,#repositoryValidationDate,hasPendingError,"
+                    "#isI18nEnabled"
+                ),
+                "kinds": (
+                    "entity,view,sap.dwc.ermodel,sap.dis.dataflow,"
+                    "sap.dwc.taskChain,sap.dwc.analyticModel,"
+                    "sap.dwc.dac,sap.repo.folder,sap.dis.replicationflow,"
+                    "sap.dis.transformationflow,sap.dwc.perspective,"
+                    "sap.dwc.consumptionModel,sap.dwc.factModel,"
+                    "sap.dwc.businessEntity,sap.dwc.authscenario"
+                ),
+            }
 
             # Request-ID aktualisieren
             self.session.headers.update(
@@ -183,7 +188,7 @@ class Views(DatasphereAutomation):
                 logger.debug(
                     "View: %s\nResponse: %s\n", view, response.text.strip()
                 )
-                continue
+                return
 
             # Infos in Datei schreiben,
             # falls Attribut mit Suchwort enthalten ist
@@ -215,6 +220,13 @@ class Views(DatasphereAutomation):
                         }
                         writer.writerow(values)
 
+        # Tasks starten
+        await self.run_async_tasks(
+            all_views,
+            check_view_for_attribute_with_substring,
+            thread_count
+        )
+
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_ATTRIBUTE"]["absolute_path"]
         logger.info("Ergebnisse gespeichert in '%s'.", file_name)
@@ -228,7 +240,7 @@ class Views(DatasphereAutomation):
         Args:
             thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
                                           Anfragen. Standard ist 1.
-        """  # TODO: überall use_threads raus und thread_count=1 als Standard
+        """
 
         # Alle Views abfragen
         all_views = await self._get_all_views()
@@ -243,176 +255,172 @@ class Views(DatasphereAutomation):
             }
         )
 
+        async def create_view_analytics(
+            view: ViewDetailsDict,
+            filter_out_own_view: bool = False,
+        ) -> None:
+            """
+            Beeinhaltet die Logik zur Erstellung der View-Analysen. 
+            Schreibt alle Views, die in der Analyse mit einem Persistenz-Score
+            von 10 bewertet wurden in eine Datei.
+
+            Args:
+                view (ViewDetailsDict): View, für die Analyse erstellt wird.
+                filter_out_own_view (bool, optional): Wenn True, wird die 
+                                                      eigene View aus der
+                                                      Analyse ausgeschlossen.
+                                                      Standard ist False.
+            """
+
+            # Abfrage vorbereiten
+            logger.debug(
+                "Starte View Analyse für %s in %s...",
+                view["name"],
+                view["space_name"],
+            )
+            space_name = view["space_name"]
+            view_name = view["name"]
+            url = (
+                f"{DATASPHERE_URL}/dwaas-core/advisor/{space_name}"
+                f"/execute/{view_name}"
+            )
+            data = {
+                "withMemoryAnalysis": False,
+                "maximumMemoryConsumptionInGiB": 1,
+            }
+            response = await self.session.post(url=url, json=data)
+
+            # Auf Fehler prüfen
+            if not (
+                response.status_code == 409
+                and "taskAlreadyRunning" in response.text
+            ) and not (
+                response.status_code == 202 
+                and "Running" in response.text
+            ):
+                logger.error(
+                    "Fehler beim Starten der View Analyse für %s in %s.",
+                    view_name,
+                    space_name,
+                )
+                return
+            logger.info(
+                "View Analyse für %s in %s gestartet.", view_name, space_name
+            )
+
+            # Request-ID aktualisieren
+            self.session.headers.update(
+                {"x-request-id": str(uuid4()).replace("-", "")}
+            )
+
+            # Logs der letzten Läufe fetchen
+            async def fetch_logs() -> list[dict]:
+                response = await self.session.get(
+                    url=f"{DATASPHERE_URL}/dwaas-core/tf/{space_name}/logs",
+                    params={"objectId": view_name, "getLocks": True},
+                )
+                return response.json()["logs"]
+
+            # Ergebnisse abwarten
+            latest_status = None
+            while latest_status != "COMPLETED":
+                logs = await fetch_logs()
+                latest_status = logs[0]["status"]
+                if latest_status == "FAILED":
+                    logger.error(
+                        "Fehler beim Generieren der View Analyse "
+                        "für %s in %s.",
+                        view_name,
+                        space_name,
+                    )
+                    return
+                # TODO: hier noch aktuelle Laufzeit mit loggen, gibt nur
+                # 'startTime': '2025-07-15T07:25:18.803Z' und 'runTime': 239
+                # (in Sekunden)
+                logger.debug(
+                    "Warte auf Ergebnisse für %s in %s...",
+                    view_name,
+                    space_name
+                )
+                await asyncio.sleep(1)
+
+            # Log-ID des letzten Laufs auslesen
+            log_id: int = (await fetch_logs())[0]["logId"]
+
+            # Request-ID aktualisieren
+            self.session.headers.update(
+                {"x-request-id": str(uuid4()).replace("-", "")}
+            )
+
+            # Ergebnisse auslesen
+            response = await self.session.get(
+                url=(
+                    f"{DATASPHERE_URL}/dwaas-core/advisor"
+                    f"/{space_name}/result/{log_id}"
+                )
+            )
+
+            # View mit besten Persistenz-Score ermitteln
+            # (10 wird nur einmal vergeben)
+            # Eigene View rausfiltern, wenn gewünscht, weil sonst kleinere 
+            # Views immer selber Score 10 erhalten
+            entity_stats = response.json()["entityStats"]
+            if filter_out_own_view:
+                entity_stats = list(
+                    filter(
+                        lambda entity: entity["entity"] != view_name,
+                        entity_stats
+                    )
+                )
+            best_view = list(
+                filter(
+                    lambda entity: entity.get("persistencyCandidateScore", 0)
+                    == 10,
+                    entity_stats,
+                )
+            )
+
+            # Falls View mit Score 10 gefunden, in Datei schreiben
+            if best_view:
+                logger.info(
+                    "View %s in %s hat Persistenz-Score 10.",
+                    best_view[0]["entity"],
+                    best_view[0]["space"],
+                )
+                with open(
+                    ALL_FILES["VIEW_ANALYSE"]["absolute_path"],
+                    "a",
+                    newline="",
+                ) as file:
+                    writer = csv.DictWriter(
+                        file,
+                        fieldnames=ALL_FILES["VIEW_ANALYSE"]["columns"],
+                    )
+                    writer.writerow(
+                        {
+                            key: best_view[0][key]
+                            for key in ALL_FILES["VIEW_ANALYSE"]["columns"]
+                        }
+                    )
+            else:
+                logger.debug("Keine View mit Persistenz-Score 10 gefunden.")
+
         # Tasks starten
-        if thread_count > 1:
-            semaphore = asyncio.Semaphore(thread_count)
-            tasks = []
-            for view in all_views:
-
-                async def process_view(view_data):
-                    async with semaphore:
-                        await self._create_view_analytics(view_data)
-
-                task = asyncio.create_task(process_view(view))
-                tasks.append(task)
-            await asyncio.gather(*tasks)
-        else:
-            for view in all_views:
-                await self._create_view_analytics(view)
+        await self.run_async_tasks(
+            all_views,
+            create_view_analytics,
+            thread_count
+        )
 
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_ANALYSE"]["absolute_path"]
         logger.info("Ergebnisse gespeichert in '%s'.", file_name)
 
-    async def _create_view_analytics(
-        self,
-        view: ViewDetailsDict,
-        filter_out_own_view: bool = False,
-    ) -> None:
-        """
-        Beeinhaltet die Logik zur Erstellung der View-Analysen. Diese Funktion
-        wird über Threads aufgerufen.
-        Schreibt alle Views, die in der Analyse mit einem Persistenz-Score
-        von 10 bewertet wurden in eine Datei.
-
-        Args:
-            view (ViewDetailsDict): View, für die eine Analyse erstellt wird.
-            filter_out_own_view (bool, optional): Wenn True, wird die eigene
-                                                  View aus der Analyse
-                                                  ausgeschlossen.
-                                                  Standard ist False.
-        """
-
-        # Abfrage vorbereiten
-        logger.debug(
-            "Starte View Analyse für %s in %s...",
-            view["name"],
-            view["space_name"],
-        )
-        space_name = view["space_name"]
-        view_name = view["name"]
-        url = (
-            f"{DATASPHERE_URL}/dwaas-core/advisor/{space_name}"
-            f"/execute/{view_name}"
-        )
-        data = {
-            "withMemoryAnalysis": False,
-            "maximumMemoryConsumptionInGiB": 1,
-        }
-        response = await self.session.post(url=url, json=data)
-
-        # Auf Fehler prüfen
-        if not (
-            response.status_code == 409
-            and "taskAlreadyRunning" in response.text
-        ) and not (response.status_code == 202 and "Running" in response.text):
-            logger.error(
-                "Fehler beim Starten der View Analyse für %s in %s.",
-                view_name,
-                space_name,
-            )
-            return
-        logger.info(
-            "View Analyse für %s in %s gestartet.", view_name, space_name
-        )
-
-        # Request-ID aktualisieren
-        self.session.headers.update(
-            {"x-request-id": str(uuid4()).replace("-", "")}
-        )
-
-        # Logs der letzten Läufe fetchen
-        async def fetch_logs() -> list[dict]:
-            response = await self.session.get(
-                url=f"{DATASPHERE_URL}/dwaas-core/tf/{space_name}/logs",
-                params={"objectId": view_name, "getLocks": True},
-            )
-            return response.json()["logs"]
-
-        # Ergebnisse abwarten
-        latest_status = None
-        while latest_status != "COMPLETED":
-            logs = await fetch_logs()
-            latest_status = logs[0]["status"]
-            if latest_status == "FAILED":
-                logger.error(
-                    "Fehler beim Generieren der View Analyse für %s in %s.",
-                    view_name,
-                    space_name,
-                )
-                return
-            # TODO: hier noch aktuelle Laufzeit mit loggen, gibt nur
-            # 'startTime': '2025-07-15T07:25:18.803Z' und 'runTime': 239
-            # (in Sekunden)
-            logger.debug(
-                "Warte auf Ergebnisse für %s in %s...", view_name, space_name
-            )
-            await asyncio.sleep(1)
-
-        # Log-ID des letzten Laufs auslesen
-        log_id: int = (await fetch_logs())[0]["logId"]
-
-        # Request-ID aktualisieren
-        self.session.headers.update(
-            {"x-request-id": str(uuid4()).replace("-", "")}
-        )
-
-        # Ergebnisse auslesen
-        response = await self.session.get(
-            url=(
-                f"{DATASPHERE_URL}/dwaas-core/advisor"
-                f"/{space_name}/result/{log_id}"
-            )
-        )
-
-        # View mit besten Persistenz-Score ermitteln
-        # (10 wird nur einmal vergeben)
-        # Eigene View rausfiltern, wenn gewünscht, weil sonst kleinere Views
-        # immer selber Score 10 erhalten
-        entity_stats = response.json()["entityStats"]
-        if filter_out_own_view:
-            entity_stats = list(
-                filter(
-                    lambda entity: entity["entity"] != view_name, entity_stats
-                )
-            )
-        best_view = list(
-            filter(
-                lambda entity: entity.get("persistencyCandidateScore", 0)
-                == 10,
-                entity_stats,
-            )
-        )
-
-        # Falls View mit Score 10 gefunden, in Datei schreiben
-        if best_view:
-            logger.info(
-                "View %s in %s hat Persistenz-Score 10.",
-                best_view[0]["entity"],
-                best_view[0]["space"],
-            )
-            with open(
-                ALL_FILES["VIEW_ANALYSE"]["absolute_path"],
-                "a",
-                newline="",
-            ) as file:
-                writer = csv.DictWriter(
-                    file,
-                    fieldnames=ALL_FILES["VIEW_ANALYSE"]["columns"],
-                )
-                writer.writerow(
-                    {
-                        key: best_view[0][key]
-                        for key in ALL_FILES["VIEW_ANALYSE"]["columns"]
-                    }
-                )
-        else:
-            logger.debug("Keine View mit Persistenz-Score 10 gefunden.")
-
     async def create_partitioning_for_views(
         self,
         partitions: list[str],
         overwrite_existing_partitions: bool = False,
+        thread_count: int = 1,
     ) -> None:
         """
         Erstellt Partitionen für alle Views,
@@ -435,6 +443,8 @@ class Views(DatasphereAutomation):
                                                             Andernfalls bleiben
                                                             sie bestehen.
                                                             Standard ist False.
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
 
         # Task-Datei lesen
@@ -456,8 +466,8 @@ class Views(DatasphereAutomation):
         self.session.headers.pop("Priority")
         self.session.headers.update({"Accept": "*/*"})
 
-        # Alle Views durchlaufen
-        for view in views_to_partition:
+        # Funktion, um zu prüfen, ob Partition bereits existiert
+        async def create_partitioning_for_view(view) -> None:
             # Prüfen, ob Partition bereits existiert
             self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
@@ -504,7 +514,7 @@ class Views(DatasphereAutomation):
                         "createdPartition": False,
                     }
                     writer.writerow(values)
-                continue
+                return
 
             # In Datei vermerken und überspringen, falls Partition bereits
             # existiert und nicht überschrieben werden soll
@@ -535,7 +545,7 @@ class Views(DatasphereAutomation):
                         "createdPartition": True,
                     }
                     writer.writerow(values)
-                continue
+                return
 
             # Partitionen erstellen
             logger.debug(
@@ -606,18 +616,30 @@ class Views(DatasphereAutomation):
                 }
                 writer.writerow(values)
 
+        # Tasks starten
+        await self.run_async_tasks(
+            views_to_partition,
+            create_partitioning_for_view,
+            thread_count
+        )
+
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_PARTITIONING_CREATE_RESULT"][
             "absolute_path"
         ]
         logger.info("Ergebnisse gespeichert in '%s'.", file_name)
 
-    async def remove_partitioning_for_views(self) -> None:
+    async def remove_partitioning_for_views(self,
+    thread_count: int = 1) -> None:
         """
         Entfernt Partitionen für alle Views,
         die in der Datei 'views_to_delete_partition.csv' enthalten sind.
         Benötigt die Task-Datei VIEW_TO_DELETE_PARTITIONING_FILE_PATH.
         Schreibt Ergebnisse in VIEW_TO_DELETE_PARTITIONING_RESULT_FILE_PATH.
+
+        Args:
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
 
         # Task-Datei lesen
@@ -639,8 +661,8 @@ class Views(DatasphereAutomation):
         self.session.headers.pop("Priority")
         self.session.headers.update({"Accept": "*/*"})
 
-        # Alle Views durchlaufen
-        for view in views_to_delete_partition:
+        # Funktion, um Partition zu entfernen
+        async def remove_partitioning_for_view(view) -> None:
             # Partition entfernen
             logger.debug(
                 "Entferne Partition für %s in %s...",
@@ -662,7 +684,7 @@ class Views(DatasphereAutomation):
                     view["entity"],
                     view["space"],
                 )
-                continue
+                return
 
             # In Datei vermerken
             logger.info(
@@ -687,6 +709,13 @@ class Views(DatasphereAutomation):
                     "removedPartition": True,
                 }
                 writer.writerow(values)
+
+        # Tasks starten
+        await self.run_async_tasks(
+            views_to_delete_partition,
+            remove_partitioning_for_view,
+            thread_count
+        )
 
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_PARTITIONING_DELETE_RESULT"][
@@ -786,6 +815,9 @@ class Views(DatasphereAutomation):
             )
 
         # Tasks starten
+        # TODO: wenn committed auch versuchen nochmal umzustellen
+        # nested process_view Funktion die mit run_async_tasks aufgerufen 
+        # werden kann erstellen
         if thread_count > 1:
             semaphore = asyncio.Semaphore(thread_count)
             tasks = []
@@ -1134,7 +1166,8 @@ class Views(DatasphereAutomation):
         )
         return True, log_details
 
-    async def lock_partitions_until_year(self, year: int) -> None:
+    async def lock_partitions_until_year(self, year: int,
+    thread_count: int = 1) -> None:
         """
         Sperrt Partitionen für alle Views, die in der
         Datei 'views_to_lock_partitions.csv' enthalten sind. Überspringt Views,
@@ -1146,6 +1179,8 @@ class Views(DatasphereAutomation):
         Args:
             year (int): Jahr, bis zu dem Partitionen gesperrt werden
                         sollen (einschließlich des Jahres selbst).
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
 
         # Task-Datei lesen
@@ -1166,7 +1201,8 @@ class Views(DatasphereAutomation):
         self.session.headers.pop("Priority")
         self.session.headers.update({"Accept": "*/*"})
 
-        for view in views_to_lock:
+        # Funktion, um Partitionen zu sperren
+        async def lock_partitions_for_view(view) -> None:
             # Prüfen, ob Partition bereits existiert
             self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
@@ -1185,7 +1221,7 @@ class Views(DatasphereAutomation):
                     view["entity"],
                     view["space"],
                 )
-                continue
+                return
 
             # Daten der View abrufen
             view_data = response.json()
@@ -1254,16 +1290,28 @@ class Views(DatasphereAutomation):
                 }
                 writer.writerow(values)
 
+        # Tasks starten
+        await self.run_async_tasks(
+            views_to_lock,
+            lock_partitions_for_view,
+            thread_count
+        )
+
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_PARTITION_LOCK_RESULT"]["absolute_path"]
         logger.info("Ergebnisse gespeichert in '%s'.", file_name)
 
-    async def unlock_all_partitions(self) -> None:
+    async def unlock_all_partitions(self,
+    thread_count: int = 1) -> None:
         """
         Entsperrt alle Partitionen für alle Views,
         die in der Datei 'views_to_unlock_partitions.csv' enthalten sind.
         Benötigt die Task-Datei VIEW_PARTITION_UNLOCK_FILE_PATH.
         Schreibt Ergebnisse in VIEW_PARTITION_UNLOCK_RESULT_FILE_PATH.
+
+        Args:
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
 
         # Task-Datei lesen
@@ -1284,7 +1332,8 @@ class Views(DatasphereAutomation):
         self.session.headers.pop("Priority")
         self.session.headers.update({"Accept": "*/*"})
 
-        for view in views_to_unlock:
+        # Funktion, um Partitionen zu entsperren
+        async def unlock_partitions_for_view(view) -> None:
             # Prüfen, ob Partition bereits existiert
             self.session.headers.update(
                 {"x-request-id": str(uuid4()).replace("-", "")}
@@ -1303,7 +1352,7 @@ class Views(DatasphereAutomation):
                     view["entity"],
                     view["space"],
                 )
-                continue
+                return
 
             # Daten der View abrufen
             view_data = response.json()
@@ -1366,6 +1415,13 @@ class Views(DatasphereAutomation):
                     "unlockedPartitions": response.status_code == 201,
                 }
                 writer.writerow(values)
+
+        # Tasks starten
+        await self.run_async_tasks(
+            views_to_unlock,
+            unlock_partitions_for_view,
+            thread_count
+        )
 
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_PARTITION_UNLOCK_RESULT"]["absolute_path"]

@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 
 import httpx
@@ -82,20 +81,22 @@ class RemoteTables(DatasphereAutomation):
         return all_tables
 
     async def create_statistics(
-        self, type: StatisticsType = "HISTOGRAM"
+        self, type: StatisticsType = "HISTOGRAM", thread_count: int = 5
     ) -> None:
         """
         Erstellt Statistiken für alle Tabellen.
 
         Args:
             type (StatisticsType): Typ der Statistik. Standard ist 'HISTOGRAM'.
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 5.
         """
 
         # Alle Tabellennamen lesen
         all_tables = await self._get_all_table_names()
 
-        # Über alle Tabellennamen iterieren und Statistik erstellen
-        for table in all_tables:
+        # Funktion, um Statistiken zu erstellen
+        async def create_statistics_for_table(table: str) -> None:
             # Nur Statistiken anlegen bei Tabellen, die sie unterstützen
             if (
                 all_tables[table]["statisticsSupported"]
@@ -135,6 +136,13 @@ class RemoteTables(DatasphereAutomation):
                     )
                     logger.debug("Response: %s\n", response.text)
 
+        # Über alle Tabellennamen iterieren und Statistik erstellen
+        await self.run_async_tasks(
+            all_tables,
+            create_statistics_for_table,
+            thread_count
+        )
+
     async def refresh_statistics(self, thread_count: int = 5) -> None:
         """
         Aktualisiert Statistiken für alle Tabellen in der
@@ -173,22 +181,9 @@ class RemoteTables(DatasphereAutomation):
                     )
                     logger.debug("Response: %s\n", response.text)
 
-        # Falls Threads genutzt werden sollen
-        if thread_count > 1:
-            semaphore = asyncio.Semaphore(thread_count)
-            tasks = []
-            for table in all_tables:
-
-                async def process_table(table_name):
-                    async with semaphore:
-                        await refresh_statistics_for_table(table_name)
-
-                task = asyncio.create_task(process_table(table))
-                tasks.append(task)
-            await asyncio.gather(*tasks)
-
-        # Falls keine Threads genutzt werden sollen
-        else:
-            # Über alle Tabellennamen iterieren und Statistik aktualisieren
-            for table in all_tables:
-                await refresh_statistics_for_table(table)
+        # Über alle Tabellennamen iterieren und Statistik aktualisieren
+        await self.run_async_tasks(
+            all_tables,
+            refresh_statistics_for_table,
+            thread_count
+        )

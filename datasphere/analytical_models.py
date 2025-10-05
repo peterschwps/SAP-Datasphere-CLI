@@ -201,7 +201,7 @@ class AnalyticalModels(DatasphereAutomation):
         return analytical_model_to_view_mapping
 
     async def get_all_views_for_analytical_models(
-        self, skip_duplicates: bool = False
+        self, skip_duplicates: bool = False, thread_count: int = 1
     ) -> None:
         """
         Speichert alle analytischen Modelle mit den dazugehörigen Views in
@@ -227,6 +227,8 @@ class AnalyticalModels(DatasphereAutomation):
                                               Dieses Feature kann z.B. genutzt
                                               werden, um Aufgabenketten zu
                                               planen.
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
 
         # Alle analytischen Modelle abrufen
@@ -241,8 +243,8 @@ class AnalyticalModels(DatasphereAutomation):
             for view in await views._get_all_views()
         ]
 
-        # Über alle Modelle iterieren
-        for model in all_analytical_models:
+        # Funktion, um alle Views aus einem Analytischen Modell zu laden
+        async def get_views_for_model(model) -> None:
             logger.debug(
                 "Lade alle Views für das Analytische Modell '%s' in '%s'...",
                 model["name"],
@@ -284,6 +286,24 @@ class AnalyticalModels(DatasphereAutomation):
                         ][view_id] = (view[1], view_name)
                         break
 
+        # Über alle Modelle iterieren
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for model in all_analytical_models:
+
+                async def process_model(current_model):
+                    async with semaphore:
+                        await get_views_for_model(current_model)
+
+                task = asyncio.create_task(process_model(model))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
+
+        else:
+            for model in all_analytical_models:
+                await get_views_for_model(model)
+
         # Ergebnis speichern
         with open(
             ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS"]["absolute_path"],
@@ -296,7 +316,9 @@ class AnalyticalModels(DatasphereAutomation):
         )
 
     async def get_all_views_for_analytical_models_in_space(
-        self, space_name: str, skip_duplicates: bool = False
+        self, space_name: str,
+        skip_duplicates: bool = False,
+        thread_count: int = 1
     ) -> None:
         """
         Speichert alle analytischen Modelle eines bestimmten Spaces mit den
@@ -325,6 +347,8 @@ class AnalyticalModels(DatasphereAutomation):
                                               Dieses Feature kann z.B. genutzt
                                               werden, um Aufgabenketten zu
                                               planen.
+            thread_count (int, optional): Anzahl an gleichzeitigen, asynchronen
+                                          Anfragen. Standard ist 1.
         """
 
         # Alle analytischen Modelle abrufen
@@ -343,9 +367,12 @@ class AnalyticalModels(DatasphereAutomation):
             for view in await views._get_all_views()
         ]
 
-        # Über alle Modelle iterieren
+        # Dict für Ergebnisse
         analytical_models_with_views_in_space = {}
-        for model in all_analytical_models_in_space:
+
+        # Funktion, um alle Views aus einem Analytischen Modell zu laden und
+        # zu filtern
+        async def filter_views_for_model(model) -> None:
             logger.debug(
                 "Lade alle Views für das Analytische Modell '%s'...",
                 model["name"],
@@ -386,6 +413,24 @@ class AnalyticalModels(DatasphereAutomation):
                             "dependencies"
                         ][view_id] = (view[1], view_name)
                         break
+
+        # Über alle Modelle iterieren
+        if thread_count > 1:
+            semaphore = asyncio.Semaphore(thread_count)
+            tasks = []
+            for model in all_analytical_models_in_space:
+
+                async def process_model(current_model):
+                    async with semaphore:
+                        await filter_views_for_model(current_model)
+
+                task = asyncio.create_task(process_model(model))
+                tasks.append(task)
+            await asyncio.gather(*tasks)
+
+        else:
+            for model in all_analytical_models_in_space:
+                await filter_views_for_model(model)
 
         # Ergebnis speichern
         file_name = ALL_FILES["ANALYTICAL_MODELS_ALL_VIEWS_IN_SPACE"][
@@ -674,22 +719,11 @@ class AnalyticalModels(DatasphereAutomation):
 
         # Tasks starten und Zeit loggen
         logger.debug("Starte Tasks...")
-        if thread_count > 1:
-            semaphore = asyncio.Semaphore(thread_count)
-            tasks = []
-            for view in all_views_to_persist:
-
-                async def process_view(view):
-                    async with semaphore:
-                        await persist_and_unpersist_view(*view)
-
-                task = asyncio.create_task(process_view(view))
-                tasks.append(task)
-            await asyncio.gather(*tasks)
-
-        else:
-            for view in all_views_to_persist:
-                await persist_and_unpersist_view(*view)
+        await self.run_async_tasks(
+            all_views_to_persist,
+            persist_and_unpersist_view,
+            thread_count
+        )
 
         # Finales Logging mit Dateipfad
         logger.info("Ergebnisse gespeichert in '%s'.", file_path_results)

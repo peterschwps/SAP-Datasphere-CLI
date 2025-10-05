@@ -201,14 +201,14 @@ class Menu:
         Bereinigt anschliessend die Konsole.
         """
 
-        # Funktionen für ähnliche Abfragen
-        def ask_for_threads() -> None:
-            use_threads = self.confirm_prompt.ask(
-                "Threads nutzen", case_sensitive=False
-            )
-            if use_threads:
-                thread_count = self.int_prompt.ask("Anzahl der Threads")
-                self.all_params["thread_count"] = thread_count
+        # Threads abfragen
+        use_threads = self.confirm_prompt.ask(
+            "Threads nutzen", case_sensitive=False
+        )
+        if use_threads:
+            thread_count = self.int_prompt.ask("Anzahl der Threads")
+            self.all_params["thread_count"] = thread_count
+        self.console.print("")
 
         # Gewählte Klasse und Methode filtern
         # Analytische Modelle
@@ -232,12 +232,6 @@ class Menu:
                     "Duplikate überspringen", case_sensitive=False
                 )
 
-            elif (
-                self.chosen_method
-                == AnalyticalModels.check_runtime_for_all_views_of_analytical_models  # noqa: E501
-            ):
-                ask_for_threads()
-
         # RemoteTables
         elif self.chosen_method in RemoteTables.__dict__.values():
             if self.chosen_method == RemoteTables.create_statistics:
@@ -255,7 +249,7 @@ class Menu:
                 self.all_params["type"] = type
 
             elif self.chosen_method == RemoteTables.refresh_statistics:
-                ask_for_threads()
+                pass
 
         # Views
         elif self.chosen_method in Views.__dict__.values():
@@ -264,9 +258,6 @@ class Menu:
                 == Views.get_all_views_where_attribute_contains
             ):
                 self.all_params["word"] = self.prompt.ask("Suchwort")
-
-            elif self.chosen_method == Views.create_view_analytics:
-                ask_for_threads()
 
             elif self.chosen_method == Views.create_partitioning_for_views:
                 self.console.print(
@@ -293,13 +284,9 @@ class Menu:
                 )
 
             elif self.chosen_method == Views.persist_views:
-                ask_for_threads()
                 self.all_params["timer"] = self.confirm_prompt.ask(
                     "Laufzeit speichern", case_sensitive=False
                 )
-
-            elif self.chosen_method == Views.unpersist_views:
-                ask_for_threads()
 
             elif self.chosen_method == Views.lock_partitions_until_year:
                 self.console.print(
@@ -310,6 +297,7 @@ class Menu:
                     "Das eingegebene Jahr wird wir auch noch gesperrt.\n"
                 )
                 self.all_params["year"] = self.int_prompt.ask("Jahr")
+
 
         # Konsole bereinigen
         self.console.clear()
