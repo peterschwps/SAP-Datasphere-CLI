@@ -781,77 +781,49 @@ class Views(DatasphereAutomation):
             {"Accept": "*/*", "x-request-id": str(uuid4()).replace("-", "")}
         )
 
-        # Funktion um Result-Datei zu aktualisieren (erst gesamte Datei
-        # einlesen, dann neu schreiben, um entsprechende Zeile zu
-        # aktualisieren)
-        def set_is_persisted_true(view_name: str, view_space: str) -> None:
-            df = pd.read_csv(ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"])
-            df.loc[
-                (df["entity"] == view_name) & (df["space"] == view_space),
-                "isPersisted",
-            ] = True
-            df.to_csv(
-                ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
-                index=False,
+        # Funktion, um View zu persistieren
+        async def persist_view(view):
+            success, log_details = await self._persist_view(
+                view["entity"], view["space"]
             )
+            runtime = round(log_details.get("runTime", 0) / 1000)
 
-        # Funktion um Result-Datei zu aktualisieren (erst gesamte Datei
-        # einlesen, dann neu schreiben, um entsprechende Zeile zu
-        # aktualisieren)
-        def update_runtime(
-            view_name: str, view_space: str, runtime: int
-        ) -> None:
-            df = pd.read_csv(
-                ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
-                dtype={"runtime": "Int64"},
-            )
-            df.loc[
-                (df["entity"] == view_name) & (df["space"] == view_space),
-                "runtime",
-            ] = runtime
-            df.to_csv(
-                ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
-                index=False,
-            )
+            # Result-Datei aktualisieren (erst gesamte Datei einlesen, dann neu
+            # schreiben, um entsprechende Zeile zu aktualisieren)
+            if success:
+                df = pd.read_csv(ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"])
+                df.loc[
+                    (df["entity"] == view["entity"]) & (df["space"] == view["space"]),
+                    "isPersisted",
+                ] = True
+                df.to_csv(
+                    ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
+                    index=False,
+                )
+
+                # Laufzeit aktualisieren, falls sie gemessen werden soll
+                # (erst gesamte Datei einlesen, dann neu schreiben, um 
+                # entsprechende Zeile zu aktualisieren)
+                if timer and runtime > 0:
+                    df = pd.read_csv(
+                        ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
+                        dtype={"runtime": "Int64"},
+                    )
+                    df.loc[
+                        (df["entity"] == view["entity"]) & (df["space"] == view["space"]),
+                        "runtime",
+                    ] = runtime
+                    df.to_csv(
+                        ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"],
+                        index=False,
+                    )
 
         # Tasks starten
-        # TODO: wenn committed auch versuchen nochmal umzustellen
-        # nested process_view Funktion die mit run_async_tasks aufgerufen 
-        # werden kann erstellen
-        if thread_count > 1:
-            semaphore = asyncio.Semaphore(thread_count)
-            tasks = []
-            for view in views_to_persist:
-
-                async def process_view(view):
-                    async with semaphore:
-                        success, log_details = await self._persist_view(
-                            view["entity"], view["space"]
-                        )
-                        runtime = round(log_details.get("runTime", 0) / 1000)
-                        if success:
-                            set_is_persisted_true(
-                                view["entity"], view["space"]
-                            )
-                            if timer and runtime > 0:
-                                update_runtime(
-                                    view["entity"], view["space"], runtime
-                                )
-
-                task = asyncio.create_task(process_view(view))
-                tasks.append(task)
-            await asyncio.gather(*tasks)
-
-        else:
-            for view in views_to_persist:
-                success, log_details = await self._persist_view(
-                    view["entity"], view["space"]
-                )
-                runtime = round(log_details.get("runTime", -1000) / 1000)
-                if success:
-                    set_is_persisted_true(view["entity"], view["space"])
-                    if timer and runtime > 0:
-                        update_runtime(view["entity"], view["space"], runtime)
+        await self.run_async_tasks(
+            views_to_persist,
+            persist_view,
+            thread_count
+        )
 
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_PERSIST_RESULT"]["absolute_path"]
@@ -1002,48 +974,33 @@ class Views(DatasphereAutomation):
             {"Accept": "*/*", "x-request-id": str(uuid4()).replace("-", "")}
         )
 
-        # Funktion, um nur entsprechende Zeile in Result-Datei zu aktualisieren
-        def set_is_removed_true(view_name: str, view_space: str) -> None:
-            """
-            Setzt isRemoved in der Result-Datei für die aktuelle View auf True.
-            """
-            df = pd.read_csv(
-                ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"]
+        # Funktion, um View zu entpersistieren
+        async def unpersist_view(view):
+            success, _ = await self._unpersist_view(
+                view["entity"], view["space"]
             )
-            df.loc[
-                (df["entity"] == view_name) & (df["space"] == view_space),
-                "isRemoved",
-            ] = True
-            df.to_csv(
-                ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"],
-                index=False,
-            )
+
+            # Result-Datei aktualisieren (erst gesamte Datei einlesen, dann neu
+            # schreiben, um entsprechende Zeile zu aktualisieren)
+            if success:
+                df = pd.read_csv(
+                    ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"]
+                )
+                df.loc[
+                    (df["entity"] == view["entity"]) & (df["space"] == view["space"]),
+                    "isRemoved",
+                ] = True
+                df.to_csv(
+                    ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"],
+                    index=False,
+                )
 
         # Tasks starten
-        if thread_count > 1:
-            semaphore = asyncio.Semaphore(thread_count)
-            tasks = []
-            for view in views_to_unpersist:
-
-                async def process_view(view):
-                    async with semaphore:
-                        success, _ = await self._unpersist_view(
-                            view["entity"], view["space"]
-                        )
-                        if success:
-                            set_is_removed_true(view["entity"], view["space"])
-
-                task = asyncio.create_task(process_view(view))
-                tasks.append(task)
-            await asyncio.gather(*tasks)
-
-        else:
-            for view in views_to_unpersist:
-                success, _ = await self._unpersist_view(
-                    view["entity"], view["space"]
-                )
-                if success:
-                    set_is_removed_true(view["entity"], view["space"])
+        await self.run_async_tasks(
+            views_to_unpersist,
+            unpersist_view,
+            thread_count
+        )
 
         # Finales Logging mit Dateipfad
         file_name = ALL_FILES["VIEW_UNPERSIST_RESULT"]["absolute_path"]
