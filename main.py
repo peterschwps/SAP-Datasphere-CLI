@@ -42,12 +42,6 @@ sys.exit(exit_code)
 
 
 # TODO: noch letztes bisschen Logging von Selenium auf Windows wegbekommen
-# TODO: Funktion best Views per View Analyzer mit allen analytischen Modellen
-#       machen
-# TODO: überall Threads einbauen? Evtl. in Automation eine run() Methode, die
-# immer dann bei Threads von der jeweiligen Methode aus aufgerufen werden kann
-# ABER BEACHTEN: Manche Methoden starten immer synchron, weil z.B. ein Aufruf
-# alle Views sammelt
 
 # Weitere TODO:
 # - Idee: Automatisierung von View-Transporten?
