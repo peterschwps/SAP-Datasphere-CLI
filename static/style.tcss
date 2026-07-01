@@ -62,7 +62,7 @@ Screen {
 }
 
 #param-error {
-    color: #D20A0A;
+    color: #AA0808;
     text-style: bold;
 }
 
