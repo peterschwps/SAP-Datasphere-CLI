@@ -3,6 +3,7 @@ from abc import abstractmethod
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
+from pathlib import Path
 from typing import Any, cast
 
 from rich.text import Text
@@ -16,11 +17,12 @@ from textual.widgets import (
     OptionList,
     RichLog,
     Static,
+    TextArea,
 )
 from textual.widgets.option_list import Option
 
 try:
-    _APP_VERSION = f"v{pkg_version('sap-datasphere-automation')}"
+    _APP_VERSION = f"Version {pkg_version('sap-datasphere-automation')}"
 except PackageNotFoundError:
     _APP_VERSION = "dev"
 
@@ -29,6 +31,7 @@ from datasphere.remote_tables import RemoteTables
 from datasphere.task_chains import TaskChains
 from datasphere.views import Views
 from static.logo import ASCII_LOGO
+from utils.filehandler import SETTINGS_FILE, settings
 from utils.logging import STREAM_FORMAT, logger
 
 # Mapping of all categories
@@ -190,17 +193,24 @@ class BaseScreen(Screen):
     """
 
     def compose(self) -> ComposeResult:
-        yield Static(id="header", content=ASCII_LOGO)
-        yield from self.compose_content()
-        yield Horizontal(
-            Static("Ctrl+C to quit", id="footer-left"),
+        yield Container(
+            Static(ASCII_LOGO, id="header-logo"),
             Static(
                 Text.from_markup(
-                    "by [link=https://github.com/peterschwps]"
-                    "@peterschwps[/link]"
+                    "[dim]by [link=https://github.com/peterschwps]"
+                    "@peterschwps[/link][/dim]"
                 ),
-                id="footer-center",
+                id="header-byline",
             ),
+            id="header",
+        )
+        yield from self.compose_content()
+        yield from self.compose_footer()
+
+    def compose_footer(self) -> ComposeResult:
+        yield Horizontal(
+            Static("[b]Quit[/b] - Ctrl+C", id="footer-left"),
+            Static("[b]Settings[/b] - Ctrl+S", id="footer-center"),
             Static(_APP_VERSION, id="footer-right"),
             id="footer",
         )
@@ -683,6 +693,60 @@ class ExecutionScreen(BaseScreen):
             self.app.pop_screen()
 
 
+class SettingsScreen(BaseScreen):
+    """
+    Screen to view and edit the settings.ini file.
+    Ctrl+S saves and reloads settings. Escape closes without saving.
+    """
+
+    BINDINGS = [Binding("ctrl+s", "save", "Save", show=False)]
+
+    def compose_content(self) -> ComposeResult:
+        yield Container(
+            Static("Edit the settings:", id="settings-label"),
+            TextArea(id="settings-editor"),
+            Static("", id="settings-status"),
+            id="content",
+        )
+
+    def compose_footer(self) -> ComposeResult:
+        """
+        Show custom footer with shortcuts to edit settings.
+
+        Yields:
+            ComposeResult: Footer with special shortcuts.
+        """
+        yield Horizontal(
+            Static("[b]Quit[/b] - Ctrl+C", id="footer-left"),
+            Static("[b]Save[/b] - Ctrl+S", id="footer-center-left"),
+            Static("[b]Close[/b] - Esc", id="footer-center-right"),
+            Static(_APP_VERSION, id="footer-right"),
+            id="footer",
+        )
+
+    def on_mount(self) -> None:
+        """
+        Event handler called after widget was added to the CLI.
+        """
+        content = Path(SETTINGS_FILE).read_text(encoding="utf-8")
+        self.query_one("#settings-editor", TextArea).load_text(content)
+
+    def action_save(self) -> None:
+        """
+        Event handler called when settings are saved.
+        """
+        text = self.query_one("#settings-editor", TextArea).text
+        Path(SETTINGS_FILE).write_text(text, encoding="utf-8")
+        settings.read(SETTINGS_FILE)
+        self.query_one("#settings-status", Static).update(
+            "[green]Saved.[/green]"
+        )
+
+    async def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.app.pop_screen()
+
+
 class DatasphereApp(App):
     """
     Global app configuration for the CLI. Calls the EntryScreen.
@@ -690,7 +754,18 @@ class DatasphereApp(App):
 
     CSS_PATH = "../static/style.tcss"
     MIN_WIDTH = 112
-    BINDINGS = [Binding("ctrl+c", "quit", "Quit", show=False)]
+    BINDINGS = [
+        Binding("ctrl+c", "quit", "Quit", show=False),
+        Binding("ctrl+s", "open_settings", "Settings", show=False),
+    ]
+
+    # Override unused bindings
+    def action_copy_text(self) -> None: pass
+    def action_focus_next(self) -> None: pass
+    def action_focus_previous(self) -> None: pass
+
+    def action_open_settings(self) -> None:
+        self.push_screen(SettingsScreen())
 
     def on_mount(self) -> None:
         self.push_screen(EntryScreen())
