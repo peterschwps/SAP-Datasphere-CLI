@@ -25,7 +25,7 @@ FORMATS = {
     logging.INFO: "#188918",
     logging.WARNING: "#C35500",
     logging.ERROR: "#D20A0A",
-    logging.CRITICAL: "bold" + "#D20A0A",
+    logging.CRITICAL: "bold #AA0808",
 }
 
 # Set up the logger
