@@ -30,20 +30,36 @@ Screen {
     text-wrap: nowrap;
 }
 
-#footer-center {
-    border-left: vkey #223548;
-    border-right: vkey #223548;
+#footer-center,
+#footer-center-left,
+#footer-center-right {
     content-align: center middle;
     width: 1fr;
 }
 
-#footer-left,
+#footer-left {
+    content-align: left middle;
+    margin-left: 3;
+    width: 1fr;
+}
+
 #footer-right {
-    content-align: center middle;
+    content-align: right middle;
+    margin-right: 3;
     width: 1fr;
 }
 
 #header {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#header-byline {
+    content-align: center middle;
+    height: 1;
+}
+
+#header-logo {
     # border: round white;
     content-align: center middle;
     # margin: 1 0 1 0;
@@ -76,6 +92,25 @@ Screen {
     padding: 1 0 0 0;
     content-align: center middle;
     color: #223548;
+}
+
+#settings-editor {
+    background: #A9B4BE;
+    border: round #223548;
+    color: #223548;
+    height: 1fr;
+}
+
+#settings-label {
+    content-align: left middle;
+    height: auto;
+    padding-top: 1;
+}
+
+#settings-status {
+    height: auto;
+    content-align: center middle;
+    padding: 1 0 0 0;
 }
 
 Input {
