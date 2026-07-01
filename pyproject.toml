@@ -18,7 +18,6 @@ dependencies = [
     "platformdirs>=4.4.0",
     "httpx>=0.28.1",
     "textual>=8.2.7",
-    "textual-dev>=1.8.0",
 ]
 
 # ----- Tools -----
@@ -44,5 +43,6 @@ typeCheckingMode = "basic"
 dev = [
     "pyright>=1.1.405",
     "ruff>=0.13.0",
+    "textual-dev>=1.8.0",
 ]
 
