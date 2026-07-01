@@ -113,6 +113,7 @@ class DatasphereAutomation:
         # If no cookies were found
         else:
             logger.debug("No cookies found.")
+            logger.debug("Opening browser window to log in...")
 
         # Start authentication/refresh
         await self._start_authentication()
