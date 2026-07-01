@@ -1,4 +1,3 @@
-import inspect
 import logging
 from abc import abstractmethod
 from collections.abc import Callable
@@ -376,12 +375,14 @@ class ParamScreen(BaseScreen):
         # Build list with all questions/prompts
         # Thread count is always the final prompt before starting the method
         self._steps: list[dict] = list(PARAM_DEFINITIONS.get(action, []))
-        self._steps.append({
-            "name": "thread_count",
-            "label": "Number of threads:",
-            "type": "int",
-            "default": 5 if isinstance(self._action, RemoteTables) else 1
-       })
+        self._steps.append(
+            {
+                "name": "thread_count",
+                "label": "Number of threads:",
+                "type": "int",
+                "default": 5 if isinstance(self._action, RemoteTables) else 1,
+            }
+        )
 
     def compose_content(self) -> ComposeResult:
         """
@@ -421,7 +422,7 @@ class ParamScreen(BaseScreen):
                 value=str(value) if value != "" else "",
                 id="current-widget",
             )
-        
+
         # Option lists for bools
         elif param_type == "bool":
             return OptionList(
@@ -429,7 +430,7 @@ class ParamScreen(BaseScreen):
                 Option("No", id="opt-no"),
                 id="current-widget",
             )
-        
+
         # Option list for type "choice"
         return OptionList(
             *[Option(c, id=f"opt-{i}") for i, c in enumerate(step["choices"])],
@@ -449,7 +450,7 @@ class ParamScreen(BaseScreen):
             f"Step {self._step + 1} of {len(self._steps)}"
         )
         self.query_one("#param-label", Static).update(f"\n{step['label']}\n")
-        
+
         # Reset any error messages
         self.query_one("#param-error", Static).update("")
 
@@ -462,18 +463,18 @@ class ParamScreen(BaseScreen):
         # Remove old input widget
         area = self.query_one("#param-widget-area")
         await area.query("*").remove()
-        
+
         # Add new input widget
         widget = self._build_widget(step)
         await area.mount(widget)
         step = self._steps[self._step]
-        
+
         # Format text fields (disables text being highlighted and sets the
         # cursor position behind the last character of the default value)
         if isinstance(widget, Input):
             widget.select_on_focus = False
             widget.cursor_position = len(widget.value)
-        
+
         # Handle option lists and restore previous selection if one was made
         # already, else set to default
         elif isinstance(widget, OptionList):
@@ -484,14 +485,12 @@ class ParamScreen(BaseScreen):
                 )
                 widget.highlighted = 0 if bool(val) else 1
             elif ptype == "choice":
-                current = self._answers.get(
-                    step["name"], step.get("default")
-                )
+                current = self._answers.get(step["name"], step.get("default"))
                 choices = step["choices"]
                 widget.highlighted = (
                     choices.index(current) if current in choices else 0
                 )
-        
+
         # Focus widget to retrieve input from user
         widget.focus()
 
@@ -504,7 +503,7 @@ class ParamScreen(BaseScreen):
         """
         step = self._steps[self._step]
         param_type = step["type"]
-        
+
         # Clear error message
         error = self.query_one("#param-error", Static)
         error.update("")
@@ -522,12 +521,12 @@ class ParamScreen(BaseScreen):
             except ValueError:
                 error.update("Please enter a whole number.")
                 return None
-        
+
         # Get selection of bool
         ol = self.query_one("#current-widget", OptionList)
         if param_type == "bool":
             return ol.highlighted == 0
-        
+
         # Get selection of "choice" type
         idx = ol.highlighted
         if idx is None:
@@ -549,7 +548,7 @@ class ParamScreen(BaseScreen):
         step = self._steps[self._step]
         self._answers[step["name"]] = value
 
-        # On final step: Convert all answers to pass it as args to the method 
+        # On final step: Convert all answers to pass it as args to the method
         if self._step == len(self._steps) - 1:
             params = dict(self._answers)
 
@@ -648,7 +647,7 @@ class ExecutionScreen(BaseScreen):
         """
         log_widget = self.query_one("#log", RichLog)
         status = self.query_one("#result-status", Static)
-        
+
         # Configure LogHandler for RichLog widget
         handler = LogHandler(log_widget)
         handler.setFormatter(STREAM_FORMAT)
@@ -660,11 +659,14 @@ class ExecutionScreen(BaseScreen):
             await instance.initialize()
             await self._action(instance, **self._params)
             status.update("Done. Press Enter or Escape to return to the menu.")
-        
+
         # Stop on any unhandled exceptions
         except Exception as e:
-            status.update(f"Error: {e}\nPress Enter or Escape to return.")
-        
+            status.update(
+                f"[b][#AA0808]Error: {e}[/]\n"
+                f"Press Enter or Escape to return."
+            )
+
         # Remove handler to prevent multiple handlers co-existing if this
         # screen gets called more than once
         finally:
@@ -685,6 +687,7 @@ class DatasphereApp(App):
     """
     Global app configuration for the CLI. Calls the EntryScreen.
     """
+
     CSS_PATH = "../static/style.tcss"
     MIN_WIDTH = 112
     BINDINGS = [Binding("ctrl+c", "quit", "Quit", show=False)]
