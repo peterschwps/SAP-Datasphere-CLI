@@ -249,7 +249,7 @@ class DatasphereApp(App):
     """
     Global app configuration for the CLI. Calls the EntryScreen.
     """
-    CSS_PATH = "static/test.tcss"
+    CSS_PATH = "../static/style.tcss"
     MIN_WIDTH = 112
     BINDINGS = [Binding("ctrl+c", "quit", "Quit", show=False)]
 

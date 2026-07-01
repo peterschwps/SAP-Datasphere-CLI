@@ -1,0 +1,79 @@
+* {
+    scrollbar-size: 0 0;
+}
+
+App {
+    background: #A9B4BE;
+    color: #223548;
+}
+
+Screen {
+    background: #A9B4BE;
+    padding: 0;
+    border: none #223548;
+}
+
+OptionList {
+    border: hkey grey 20%;
+    background: grey 20%;
+}
+
+#header {
+    # border: round white;
+    content-align: center middle;
+    # margin: 1 0 1 0;
+    min-width: 112;
+    text-wrap: nowrap;
+}
+
+#content {
+    align-horizontal: center;
+    border: hkey #223548;
+    content-align: center middle;
+    height: 1fr;
+    padding: 0 1 0 1;
+}
+
+#menu {
+    height: 1fr;
+}
+
+#footer {
+    height: 1;
+    # margin: 1 0 0 0;
+    min-width: 50;
+    opacity: 80%;
+    text-wrap: nowrap;
+}
+
+#footer-left,
+#footer-right {
+    content-align: center middle;
+    width: 1fr;
+}
+
+#footer-center {
+    border-left: vkey #223548;
+    border-right: vkey #223548;
+    content-align: center middle;
+    width: 1fr;
+}
+
+OptionList, ListView {
+    background: #A9B4BE;
+    border: round #223548;
+}
+
+OptionList > .option-list--option-highlighted {
+    background: #5B738B;
+    color: $text;
+    text-style: bold;
+}
+
+OptionList > .option-list--option {
+    color: #223548;
+}
+
+OptionList > .option-list--option-hover {
+    color: #223548;
+}
