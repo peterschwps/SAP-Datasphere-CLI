@@ -5,6 +5,6 @@ from utils.screens import DatasphereApp
 # Must be executed first
 file_setup()
 
-# Load app
+# Start app
 app = DatasphereApp()
 app.run(mouse=False)
