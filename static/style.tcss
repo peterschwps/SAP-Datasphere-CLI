@@ -13,18 +13,6 @@ Screen {
     border: none #223548;
 }
 
-OptionList {
-    border: hkey grey 20%;
-    background: grey 20%;
-}
-
-#header {
-    # border: round white;
-    content-align: center middle;
-    # margin: 1 0 1 0;
-    min-width: 112;
-    text-wrap: nowrap;
-}
 
 #content {
     align-horizontal: center;
@@ -32,10 +20,6 @@ OptionList {
     content-align: center middle;
     height: 1fr;
     padding: 0 1 0 1;
-}
-
-#menu {
-    height: 1fr;
 }
 
 #footer {
@@ -46,12 +30,6 @@ OptionList {
     text-wrap: nowrap;
 }
 
-#footer-left,
-#footer-right {
-    content-align: center middle;
-    width: 1fr;
-}
-
 #footer-center {
     border-left: vkey #223548;
     border-right: vkey #223548;
@@ -59,19 +37,70 @@ OptionList {
     width: 1fr;
 }
 
+#footer-left,
+#footer-right {
+    content-align: center middle;
+    width: 1fr;
+}
+
+#header {
+    # border: round white;
+    content-align: center middle;
+    # margin: 1 0 1 0;
+    min-width: 112;
+    text-wrap: nowrap;
+}
+
+#log {
+    height: 1fr;
+    border: round #223548;
+    background: #A9B4BE;
+}
+
+#menu {
+    height: 1fr;
+}
+
+#param-error {
+    color: #D20A0A;
+    text-style: bold;
+}
+
+#param-form {
+    height: 1fr;
+    padding: 1 2;
+}
+
+#result-status {
+    height: auto;
+    padding: 1 0 0 0;
+    content-align: center middle;
+    color: #223548;
+}
+
+Input {
+    background: #A9B4BE;
+    border: tall #223548;
+    color: #223548;
+}
+
+Input:focus {
+    border: tall #5B738B;
+}
+
 OptionList, ListView {
     background: #A9B4BE;
     border: round #223548;
+}
+
+OptionList > .option-list--option {
+    color: #223548;
 }
 
 OptionList > .option-list--option-highlighted {
     background: #5B738B;
     color: $text;
     text-style: bold;
-}
-
-OptionList > .option-list--option {
-    color: #223548;
 }
 
 OptionList > .option-list--option-hover {
